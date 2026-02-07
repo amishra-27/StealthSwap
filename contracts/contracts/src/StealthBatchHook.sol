@@ -266,7 +266,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
     {
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(allowedPoolId)) revert InvalidPool();
         beforeSwapCount[key.toId()]++;
-        return this.beforeSwap.selector;
+        return IHooks.beforeSwap.selector;
     }
 
     /// @dev Callback hook placeholder for lifecycle visibility; poolManager invokes this after swap execution.
@@ -277,7 +277,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
     {
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(allowedPoolId)) revert InvalidPool();
         afterSwapCount[key.toId()]++;
-        return this.afterSwap.selector;
+        return IHooks.afterSwap.selector;
     }
 
     /// REVIEW REQUIRED:
