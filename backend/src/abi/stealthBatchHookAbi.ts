@@ -9,6 +9,11 @@ Docs references:
 // This ABI must match the deployed contract interface exactly.
 export const stealthBatchHookAbi = [
   {
+    type: "error",
+    name: "AllowedPoolNotConfigured",
+    inputs: [],
+  },
+  {
     type: "function",
     name: "queueSwapExactIn",
     stateMutability: "nonpayable",
@@ -144,4 +149,3 @@ export const stealthBatchHookAbi = [
 ] as const;
 
 export type StealthBatchHookAbi = typeof stealthBatchHookAbi;
-
