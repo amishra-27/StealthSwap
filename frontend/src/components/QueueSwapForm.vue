@@ -20,6 +20,7 @@ import {
   explorerBaseUrl,
   getVeilBatchContract,
   publicClient,
+  toUserFacingViemError,
   walletClient,
 } from "../lib/viem/clients";
 import {
@@ -37,7 +38,7 @@ const amountIn = ref("");
 const minOut = ref("");
 const recipient = ref("");
 const busy = ref(false);
-const message = ref("Enter raw token units and queue your swap intent.");
+const message = ref("Set values and queue.");
 const txHash = ref<string | null>(null);
 const pending = ref(false);
 const txExplorerUrl = ref<string | null>(null);
@@ -97,7 +98,7 @@ async function queueSwap(): Promise<void> {
     const parsedAmountIn = parseUint128(amountIn.value.trim(), "amountIn");
     const parsedMinOut = parseUint128(minOut.value.trim(), "minOut");
 
-    message.value = "Confirm transaction in wallet...";
+    message.value = "Confirm in wallet...";
     const [account] = await walletClient.requestAddresses();
     if (!account) {
       throw new Error("Wallet did not return an account.");
@@ -115,7 +116,7 @@ async function queueSwap(): Promise<void> {
     txHash.value = hash;
     txExplorerUrl.value = `${explorerBaseUrl}/tx/${hash}`;
     pending.value = true;
-    message.value = "Transaction submitted. Waiting for confirmation...";
+    message.value = "Submitted. Waiting for confirmation...";
     pushToast("Swap queued. Waiting for confirmation.", "info");
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -123,19 +124,16 @@ async function queueSwap(): Promise<void> {
       throw new Error("Transaction reverted.");
     }
     pending.value = false;
-    message.value = "Swap intent confirmed.";
+    message.value = "Queued.";
     pushToast("Swap intent confirmed.", "success");
     window.dispatchEvent(new CustomEvent(INTENTS_REFRESH_EVENT));
   } catch (error) {
     pending.value = false;
     if (error instanceof WalletProviderError || error instanceof ChainMismatchError) {
       message.value = error.message;
-    } else if (error instanceof Error) {
-      message.value = error.message;
-      pushToast(error.message, "error");
     } else {
-      message.value = "Failed to queue swap.";
-      pushToast("Failed to queue swap.", "error");
+      message.value = toUserFacingViemError(error);
+      pushToast(message.value, "error");
     }
   } finally {
     busy.value = false;
@@ -149,27 +147,19 @@ onMounted(() => {
 
 <template>
   <form class="panel" @submit.prevent="queueSwap">
-    <p class="callout">This is a hackathon demo. Review contract before using real funds.</p>
-    <div class="signed-info">
-      <p class="helper-text">
-        You will sign one transaction for <span class="mono">queueSwapExactIn(amountIn, minOut, recipient)</span>.
-      </p>
-    </div>
+    <p class="callout">Hackathon demo. Review contract before using real funds.</p>
     <div class="field-grid">
       <label class="field">
         <span class="field-label">Amount In</span>
         <input class="input mono" v-model="amountIn" inputmode="numeric" placeholder="1000000" />
-        <span class="field-help">Raw token units (uint128)</span>
       </label>
       <label class="field">
         <span class="field-label">Min Out</span>
         <input class="input mono" v-model="minOut" inputmode="numeric" placeholder="950000" />
-        <span class="field-help">Slippage guard floor (uint128)</span>
       </label>
       <label class="field">
-        <span class="field-label">Recipient</span>
-        <input class="input mono" v-model="recipient" placeholder="0x..." />
-        <span class="field-help">Defaults to connected wallet if left blank.</span>
+        <span class="field-label">Recipient (optional)</span>
+        <input class="input mono" v-model="recipient" placeholder="0x... (default: connected wallet)" />
       </label>
     </div>
     <div class="button-row">

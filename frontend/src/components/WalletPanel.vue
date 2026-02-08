@@ -29,7 +29,7 @@ const emit = defineEmits<{
 
 const account = ref<Address | null>(null);
 const chainId = ref<number | null>(null);
-const message = ref("Connect your wallet to begin.");
+const message = ref("Connect wallet.");
 const busy = ref(false);
 const wrongChain = computed(
   () => chainId.value !== null && chainId.value !== TARGET_CHAIN_ID,
@@ -195,11 +195,6 @@ onUnmounted(() => {
       >
         Switch to Sepolia
       </button>
-    </div>
-    <div class="signed-info">
-      <p class="helper-text">
-        You will sign wallet prompts only for connect and network-switch requests.
-      </p>
     </div>
     <dl class="metric-grid">
       <div class="metric">

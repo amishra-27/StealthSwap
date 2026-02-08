@@ -31,8 +31,12 @@ export const explorerBaseUrl =
 
 export const publicClient = createPublicClient({
   chain: targetChain,
-  transport: http(sepoliaRpcUrl),
+  transport: http(sepoliaRpcUrl, { batch: true }),
 });
+
+export const ALLOWED_POOL_NOT_CONFIGURED_SELECTOR = "0x2865d89a";
+export const HOOK_NOT_CONFIGURED_MESSAGE =
+  "Hook pool is not configured yet. Run the deploy+pool init script (or setAllowedPoolIdOnce) before using the app.";
 
 export class WalletProviderError extends Error {
   constructor() {
@@ -48,6 +52,20 @@ export class ChainMismatchError extends Error {
     );
     this.name = "ChainMismatchError";
   }
+}
+
+export function toUserFacingViemError(error: unknown): string {
+  if (error instanceof Error) {
+    const message = error.message;
+    if (
+      message.includes(ALLOWED_POOL_NOT_CONFIGURED_SELECTOR) ||
+      message.includes("AllowedPoolNotConfigured")
+    ) {
+      return HOOK_NOT_CONFIGURED_MESSAGE;
+    }
+    return message;
+  }
+  return "Contract call failed.";
 }
 
 export const walletClient =

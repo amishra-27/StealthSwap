@@ -26,6 +26,7 @@ import {
   getVeilBatchContract,
   publicClient,
   targetChain,
+  toUserFacingViemError,
   walletClient,
 } from "../lib/viem/clients";
 import {
@@ -157,7 +158,7 @@ async function refreshWindowState(): Promise<void> {
       message.value = `Ready to clear previous window ${prevWindow.toString()}.`;
     }
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "Failed to load admin state.";
+    message.value = toUserFacingViemError(error);
   } finally {
     loading.value = false;
   }
@@ -198,7 +199,7 @@ async function clearPreviousWindow(): Promise<void> {
     pushToast("Window clear confirmed.", "success");
     await refreshWindowState();
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "Clear transaction failed.";
+    message.value = toUserFacingViemError(error);
     pushToast(message.value, "error");
   } finally {
     clearing.value = false;

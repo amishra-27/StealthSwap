@@ -20,6 +20,7 @@ import {
   explorerBaseUrl,
   getVeilBatchContract,
   publicClient,
+  toUserFacingViemError,
   walletClient,
 } from "../lib/viem/clients";
 import {
@@ -53,11 +54,14 @@ type ClearRow = {
 
 const address = getVeilBatchHookAddress();
 const INTENTS_REFRESH_EVENT = "veilswap:intents:refresh";
+const DEFAULT_LOG_LOOKBACK = 120_000n;
+const configuredDeploymentBlockRaw =
+  import.meta.env.PUBLIC_DEPLOYMENT_BLOCK ?? import.meta.env.PUBLIC_VEIL_DEPLOYMENT_BLOCK;
 
 const intents = ref<IntentRow[]>([]);
 const recentClears = ref<ClearRow[]>([]);
 const account = ref<Address | null>(null);
-const message = ref("Load activity to view intent lifecycle and claim state.");
+const message = ref("Load activity.");
 const loading = ref(false);
 const claimBusyKey = ref<string | null>(null);
 
@@ -86,6 +90,12 @@ function statusChipClass(status: IntentStatus): string {
   return "chip-queued";
 }
 
+function parseDeploymentBlock(raw: string | undefined): bigint | null {
+  if (!raw) return null;
+  if (!/^\d+$/.test(raw)) return null;
+  return BigInt(raw);
+}
+
 async function ensureAccount(allowPrompt: boolean): Promise<Address | null> {
   if (!walletClient) {
     throw new WalletProviderError();
@@ -105,6 +115,7 @@ async function ensureAccount(allowPrompt: boolean): Promise<Address | null> {
 }
 
 async function loadIntents(allowPrompt = true): Promise<void> {
+  if (loading.value) return;
   if (!address) {
     message.value = addressError();
     return;
@@ -126,11 +137,16 @@ async function loadIntents(allowPrompt = true): Promise<void> {
       client: publicClient,
     });
 
-    // Performance guard: use onchain deployment/start marker as bounded log range start.
-    const [startBlock, latestBlock] = await Promise.all([
-      readContract.read.startBlock(),
-      publicClient.getBlockNumber(),
-    ]);
+    const latestBlock = await publicClient.getBlockNumber();
+    const deploymentBlock = parseDeploymentBlock(configuredDeploymentBlockRaw);
+    const fallbackFromBlock =
+      latestBlock > DEFAULT_LOG_LOOKBACK ? latestBlock - DEFAULT_LOG_LOOKBACK : 0n;
+    const fromBlock =
+      deploymentBlock === null
+        ? fallbackFromBlock
+        : deploymentBlock <= latestBlock
+          ? deploymentBlock
+          : latestBlock;
 
     const [queuedLogs, claimedLogs, clearLogs] = await Promise.all([
       publicClient.getContractEvents({
@@ -138,7 +154,7 @@ async function loadIntents(allowPrompt = true): Promise<void> {
         abi: stealthBatchHookAbi,
         eventName: "IntentQueued",
         strict: true,
-        fromBlock: startBlock,
+        fromBlock,
         toBlock: latestBlock,
       }),
       publicClient.getContractEvents({
@@ -146,7 +162,7 @@ async function loadIntents(allowPrompt = true): Promise<void> {
         abi: stealthBatchHookAbi,
         eventName: "Claimed",
         strict: true,
-        fromBlock: startBlock,
+        fromBlock,
         toBlock: latestBlock,
       }),
       publicClient.getContractEvents({
@@ -154,7 +170,7 @@ async function loadIntents(allowPrompt = true): Promise<void> {
         abi: stealthBatchHookAbi,
         eventName: "WindowCleared",
         strict: true,
-        fromBlock: startBlock,
+        fromBlock,
         toBlock: latestBlock,
       }),
     ]);
@@ -243,10 +259,8 @@ async function loadIntents(allowPrompt = true): Promise<void> {
   } catch (error) {
     if (error instanceof WalletProviderError || error instanceof ChainMismatchError) {
       message.value = error.message;
-    } else if (error instanceof Error) {
-      message.value = error.message;
     } else {
-      message.value = "Failed to load intents.";
+      message.value = toUserFacingViemError(error);
     }
     pushToast(message.value, "error");
   } finally {
@@ -317,10 +331,8 @@ async function claimIntent(row: IntentRow): Promise<void> {
 
     if (error instanceof WalletProviderError || error instanceof ChainMismatchError) {
       message.value = error.message;
-    } else if (error instanceof Error) {
-      message.value = error.message;
     } else {
-      message.value = "Claim failed.";
+      message.value = toUserFacingViemError(error);
     }
     pushToast(message.value, "error");
   } finally {

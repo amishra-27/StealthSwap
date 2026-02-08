@@ -18,7 +18,7 @@ import {
   MISSING_CONTRACT_ADDRESS_MESSAGE,
   getVeilBatchHookAddress,
 } from "../lib/viem/contractConfig";
-import { publicClient } from "../lib/viem/clients";
+import { publicClient, toUserFacingViemError } from "../lib/viem/clients";
 
 type BatchPhase = "Collecting" | "Clearable" | "Cleared" | "Settled";
 
@@ -59,6 +59,7 @@ function updatePhaseHints(nextPhase: BatchPhase): void {
 }
 
 async function refresh(): Promise<void> {
+  if (busy.value) return;
   if (!address) {
     message.value = addressError();
     return;
@@ -115,7 +116,7 @@ async function refresh(): Promise<void> {
     updatePhaseHints(nextPhase);
     message.value = "Window status synced.";
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "Failed to load window state.";
+    message.value = toUserFacingViemError(error);
   } finally {
     busy.value = false;
   }
