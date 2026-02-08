@@ -145,3 +145,6 @@ export const stealthBatchHookAbi = [
 
 export type StealthBatchHookAbi = typeof stealthBatchHookAbi;
 
+// Vue-facing alias: same ABI object, alternate name used in frontend modules.
+export const veilBatchHookAbi = stealthBatchHookAbi;
+export type VeilBatchHookAbi = typeof veilBatchHookAbi;
