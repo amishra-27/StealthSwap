@@ -21,13 +21,14 @@ import { sepolia } from "viem/chains";
 import { stealthBatchHookAbi } from "../../abi/stealthBatchHookAbi";
 
 const DEFAULT_SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
-const TARGET_CHAIN_ID = sepolia.id;
+export const targetChain = sepolia;
+export const TARGET_CHAIN_ID = targetChain.id;
 
 export const sepoliaRpcUrl =
   import.meta.env.PUBLIC_SEPOLIA_RPC_URL ?? DEFAULT_SEPOLIA_RPC_URL;
 
 export const publicClient = createPublicClient({
-  chain: sepolia,
+  chain: targetChain,
   transport: http(sepoliaRpcUrl),
 });
 
@@ -50,7 +51,7 @@ export class ChainMismatchError extends Error {
 export const walletClient =
   typeof window !== "undefined" && window.ethereum
     ? createWalletClient({
-        chain: sepolia,
+        chain: targetChain,
         transport: custom(window.ethereum),
       })
     : undefined;
