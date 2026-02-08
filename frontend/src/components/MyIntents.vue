@@ -148,6 +148,10 @@ async function loadIntents(allowPrompt = true): Promise<void> {
   }
 }
 
+function onLoadIntentsClick(): void {
+  void loadIntents();
+}
+
 function onIntentsRefreshRequested(): void {
   void loadIntents(false);
 }
@@ -205,7 +209,7 @@ async function claimIntent(row: IntentRow): Promise<void> {
 <template>
   <div class="panel">
     <div class="actions">
-      <button class="button" type="button" :disabled="loading" @click="loadIntents">
+      <button class="button" type="button" :disabled="loading" @click="onLoadIntentsClick">
         {{ loading ? "Loading..." : "Load My Intents" }}
       </button>
     </div>
