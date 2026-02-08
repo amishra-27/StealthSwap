@@ -6,6 +6,7 @@ Docs references:
 - Uniswap v4 hooks concept (pool-scoped hook execution): https://docs.uniswap.org/contracts/v4/concepts/hooks
 - Uniswap v4 PoolManager lifecycle overview: https://docs.uniswap.org/contracts/v4/overview
 - Uniswap v4 AsyncSwap/custom accounting context: https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap
+- Future direction: adopt standardized hook metadata/indexing conventions for faster caching/indexing.
 - OpenZeppelin Uniswap Hooks base contracts: not used in this frontend component.
 */
 
@@ -32,6 +33,9 @@ type IntentRow = {
   amountIn: bigint;
   minOut: bigint;
   claimed: boolean;
+  status: "Pending Clear" | "Claimable" | "Claimed";
+  claimableEstimate: bigint | null;
+  canClaim: boolean;
   claimTxHash: string | null;
 };
 
@@ -96,30 +100,80 @@ async function loadIntents(allowPrompt = true): Promise<void> {
       abi: stealthBatchHookAbi,
       client: publicClient,
     });
+
+    // Use contract startBlock as lower bound to keep event scan performant.
     const startBlock = await readContract.read.startBlock();
 
-    const logs = await publicClient.getContractEvents({
-      address,
-      abi: stealthBatchHookAbi,
-      eventName: "IntentQueued",
-      strict: true,
-      fromBlock: startBlock,
-    });
-    const userIntents = logs.filter(
+    const [queuedLogs, claimedLogs] = await Promise.all([
+      publicClient.getContractEvents({
+        address,
+        abi: stealthBatchHookAbi,
+        eventName: "IntentQueued",
+        strict: true,
+        fromBlock: startBlock,
+      }),
+      publicClient.getContractEvents({
+        address,
+        abi: stealthBatchHookAbi,
+        eventName: "Claimed",
+        strict: true,
+        fromBlock: startBlock,
+      }),
+    ]);
+
+    const userIntents = queuedLogs.filter(
       (log) => log.args.user.toLowerCase() === user.toLowerCase(),
     );
+    const claimedByUser = claimedLogs.filter(
+      (log) => log.args.user.toLowerCase() === user.toLowerCase(),
+    );
+
+    const claimedKeys = new Set(
+      claimedByUser.map((log) => toKey(log.args.windowId, log.args.intentId)),
+    );
+
+    const uniqueWindows = [...new Set(userIntents.map((log) => log.args.windowId.toString()))].map(
+      (value) => BigInt(value),
+    );
+
+    const windowPairs = await Promise.all(
+      uniqueWindows.map(async (windowId) => {
+        const windowData = await readContract.read.getWindow([windowId]);
+        return [windowId.toString(), windowData] as const;
+      }),
+    );
+    const windowsById = new Map(windowPairs);
 
     const rows = await Promise.all(
       userIntents.map(async (log) => {
         const window = log.args.windowId;
         const intent = log.args.intentId;
         const intentData = await readContract.read.getIntent([window, intent]);
+        const windowData = windowsById.get(window.toString());
+
+        const wasClaimed = claimedKeys.has(toKey(window, intent)) || intentData.claimed;
+        const isCleared = windowData?.cleared ?? false;
+        const claimableEstimate =
+          isCleared && !wasClaimed && (windowData?.totalIn ?? 0n) > 0n
+            ? (intentData.amountIn * (windowData?.totalOut ?? 0n)) / (windowData?.totalIn ?? 1n)
+            : null;
+
+        let status: IntentRow["status"] = "Pending Clear";
+        if (wasClaimed) {
+          status = "Claimed";
+        } else if (isCleared) {
+          status = "Claimable";
+        }
+
         return {
           windowId: window,
           intentId: intent,
           amountIn: intentData.amountIn,
           minOut: intentData.minOut,
-          claimed: intentData.claimed,
+          claimed: wasClaimed,
+          status,
+          claimableEstimate,
+          canClaim: status === "Claimable",
           claimTxHash: null,
         } satisfies IntentRow;
       }),
@@ -184,14 +238,23 @@ async function claimIntent(row: IntentRow): Promise<void> {
 
     const contract = await getVeilBatchContract(address);
     const hash = await contract.write.claim([row.windowId, row.intentId], { account: signer });
+    await publicClient.waitForTransactionReceipt({ hash });
 
     intents.value = intents.value.map((item) =>
       item.windowId === row.windowId && item.intentId === row.intentId
-        ? { ...item, claimTxHash: hash, claimed: true }
+        ? {
+            ...item,
+            claimTxHash: hash,
+            claimed: true,
+            status: "Claimed",
+            claimableEstimate: null,
+            canClaim: false,
+          }
         : item,
     );
 
-    message.value = "Claim submitted.";
+    window.dispatchEvent(new CustomEvent(INTENTS_REFRESH_EVENT));
+    message.value = "Claim confirmed.";
   } catch (error) {
     if (error instanceof WalletProviderError || error instanceof ChainMismatchError) {
       message.value = error.message;
@@ -236,22 +299,26 @@ async function claimIntent(row: IntentRow): Promise<void> {
           </div>
           <div>
             <dt>Status</dt>
-            <dd>{{ row.claimed ? "Claimed" : "Claimable" }}</dd>
+            <dd>{{ row.status }}</dd>
+          </div>
+          <div>
+            <dt>Claimable Estimate</dt>
+            <dd>{{ row.claimableEstimate ?? "—" }}</dd>
           </div>
         </dl>
 
         <button
           class="button"
           type="button"
-          :disabled="row.claimed || claimBusyKey === toKey(row.windowId, row.intentId)"
+          :disabled="!row.canClaim || claimBusyKey === toKey(row.windowId, row.intentId)"
           @click="claimIntent(row)"
         >
           {{
             claimBusyKey === toKey(row.windowId, row.intentId)
               ? "Claiming..."
-              : row.claimed
-                ? "Claimed"
-                : "Claim"
+              : row.canClaim
+                ? "Claim"
+                : row.status
           }}
         </button>
         <p v-if="row.claimTxHash" class="tx">Claim Tx: {{ row.claimTxHash }}</p>
