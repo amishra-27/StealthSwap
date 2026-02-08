@@ -309,7 +309,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     /// - Replace placeholder accounting with deterministic execution against PoolManager + custom accounting path.
     /// - Record the actual output from execution and set window.totalOut from that result.
     /// - Validate slippage and settlement token invariants for single-pool mode.
-    function _computeWindowTotalOut(PoolId, uint64, uint256 totalIn) internal pure returns (uint256 totalOut) {
+    function _computeWindowTotalOut(PoolId, uint64, uint256 totalIn) internal view virtual returns (uint256 totalOut) {
         // Minimal end-to-end placeholder to keep clear/claim operational for MVP demos.
         totalOut = totalIn;
     }
