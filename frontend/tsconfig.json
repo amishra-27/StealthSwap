@@ -1,0 +1,10 @@
+{
+  // viem TypeScript docs: enable strict mode.
+  // https://viem.sh/docs/typescript
+  "extends": "./node_modules/astro/tsconfigs/strict.json",
+  "compilerOptions": {
+    "strict": true
+  },
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist"]
+}
