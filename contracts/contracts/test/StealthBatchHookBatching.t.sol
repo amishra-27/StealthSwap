@@ -25,7 +25,6 @@ contract StealthBatchHookHarness is StealthBatchHook {
 
     constructor(
         IPoolManager _poolManager,
-        PoolId _allowedPoolId,
         uint64 _startBlock,
         uint64 _blocksPerWindow,
         uint64 _cancelDelayBlocks,
@@ -35,7 +34,6 @@ contract StealthBatchHookHarness is StealthBatchHook {
     )
         StealthBatchHook(
             _poolManager,
-            _allowedPoolId,
             _startBlock,
             _blocksPerWindow,
             _cancelDelayBlocks,
@@ -77,13 +75,14 @@ contract StealthBatchHookBatchingTest is Test {
     function setUp() public {
         uint160 flags = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
         bytes memory constructorArgs =
-            abi.encode(IPoolManager(address(1)), ALLOWED_POOL_ID, uint64(0), uint64(20), uint64(0), uint16(10), uint128(1), true);
+            abi.encode(IPoolManager(address(1)), uint64(0), uint64(20), uint64(0), uint16(10), uint128(1), true);
 
         (address hookAddress, bytes32 salt) =
             HookMiner.find(address(this), flags, type(StealthBatchHookHarness).creationCode, constructorArgs);
 
-        hook = new StealthBatchHookHarness{salt: salt}(IPoolManager(address(1)), ALLOWED_POOL_ID, 0, 20, 0, 10, 1, true);
+        hook = new StealthBatchHookHarness{salt: salt}(IPoolManager(address(1)), 0, 20, 0, 10, 1, true);
         require(address(hook) == hookAddress, "StealthBatchHookBatchingTest: hook address mismatch");
+        hook.setAllowedPoolIdOnce(ALLOWED_POOL_ID);
     }
 
     function testQueueStoresIntentInCorrectWindow() public {

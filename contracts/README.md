@@ -128,6 +128,7 @@ function getHooksCalls() public pure returns (Hooks.Calls memory) {
 <!--
 Docs references:
 - Uniswap v4 Hooks concepts (pool-specific hooks): https://docs.uniswap.org/contracts/v4/concepts/hooks
+- Uniswap v4 Deployments (official PoolManager addresses): https://docs.uniswap.org/contracts/v4/deployments
 - Uniswap v4 PoolManager lifecycle: https://docs.uniswap.org/contracts/v4/overview
 - Uniswap v4 AsyncSwap/custom accounting: https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap
 - OpenZeppelin Uniswap Hooks base overview: https://github.com/openzeppelin/uniswap-hooks/blob/master/docs/modules/ROOT/pages/base.adoc
@@ -136,7 +137,81 @@ Docs references:
 - Hook callbacks are enabled by address-encoded permissions. If hook permissions change, re-mine the hook deployment salt.
 - `DeployHook.s.sol` already uses `HookMiner.find(...)` with CREATE2 to target the required permission bits.
 - Set `HOOK_CONTRACT="StealthBatchHook.sol:StealthBatchHook"` in `.env` when deploying this hook.
+- For `StealthBatchHook`, set flags exactly to:
+  - `BEFORE_SWAP=true`
+  - `AFTER_SWAP=true`
+  - all other flags `false` (unless contract permissions are changed in code)
+- If you later enable `AFTER_INITIALIZE` (for start-block anchoring at pool initialize), update flags and re-mine hook salt/address.
+- `StealthBaseHook` validates hook permissions in the constructor; wrong address bits/flags will fail deployment or cause unexpected callback behavior.
+- `DeployHook.s.sol` reads constructor args from `.env` for `StealthBatchHook`:
+  - `START_BLOCK`, `BLOCKS_PER_WINDOW`, `CANCEL_DELAY_BLOCKS`, `MAX_INTENTS_PER_WINDOW`, `MIN_AMOUNT_IN`, `ZERO_FOR_ONE_DIRECTION`
+- Ensure `constructorArgs` used during `HookMiner.find(...)` exactly match on-chain deployment args (order, types, values).
+- Ensure the CREATE2 deployer address in mining matches the actual deployer contract used on target network.
+- Use the real `POOL_MANAGER_ADDR` for target network (not test harness placeholders like `address(1)`).
+- `allowedPoolId` is now set once after deployment via `setAllowedPoolIdOnce(key.toId())`; it is no longer a constructor arg.
+- `USE_RUNTIME_START_BLOCK=true` anchors window math to the current RPC block for that deployment run.
+- For fully fixed demo replayability, set `USE_RUNTIME_START_BLOCK=false` and set explicit `START_BLOCK` (for example `0`).
+- `CANCEL_DELAY_BLOCKS=0` means cancel becomes available immediately after window end (`block.number >= windowEndExclusive`).
+- `hasQueuedIntent` is intentionally not reset in a window (MVP one-intent-per-address-per-window policy), including after cancel/claim terminalization.
+- Claim math uses floor rounding: `floor(windowTotalOut * userIn / windowTotalIn)`; residual dust can be handled via `sweepDust(windowId, to)` after all intents are terminally settled.
 - For batched intent execution, plan hook permissions and address mining before testnet deploys to avoid mismatched callback behavior.
+
+## StealthBatchHook Deploy + Pool Initialize (SC-5)
+
+<!--
+Docs references:
+- Uniswap v4 hook deployment guide (flags + address mining): https://docs.uniswap.org/contracts/v4/guides/hooks/hook-deployment
+- Uniswap v4 deployments (official contract addresses): https://docs.uniswap.org/contracts/v4/deployments
+- Uniswap v4 hooks concepts (pool-specific attachment at initialize): https://docs.uniswap.org/contracts/v4/concepts/hooks
+- Uniswap v4 PoolManager lifecycle overview: https://docs.uniswap.org/contracts/v4/overview
+- Uniswap v4 AsyncSwap/custom accounting context: https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap
+-->
+
+`REVIEW REQUIRED`: deployment + pool init flow below is an MVP scaffold, not production-ready release guidance.
+
+The script `contracts/script/DeployStealthBatchHookAndPool.s.sol` does all of the following:
+
+- validates `HOOK_CONTRACT` is `StealthBatchHook.sol:StealthBatchHook`
+- validates hook flags are exactly `beforeSwap + afterSwap` (no extras)
+- prints preflight chainId + `POOL_MANAGER_ADDR` and warns on Sepolia mismatch against official v4 deployments docs
+- mines salt with `HookMiner.find(...)` for CREATE2 hook deployment
+- computes pool id from the final `PoolKey` (`key.toId()`), calls `setAllowedPoolIdOnce(poolId)`, then initializes the pool on `POOL_MANAGER_ADDR`
+
+### Required `.env` values for this script
+
+- constructor args: `USE_RUNTIME_START_BLOCK`, `START_BLOCK` (used only when runtime mode is false), `BLOCKS_PER_WINDOW`, `CANCEL_DELAY_BLOCKS`, `MAX_INTENTS_PER_WINDOW`, `MIN_AMOUNT_IN`, `ZERO_FOR_ONE_DIRECTION`
+- pool params: `POOL_TOKEN_A`, `POOL_TOKEN_B`, `POOL_FEE`, `POOL_TICK_SPACING`, `POOL_SQRT_PRICE_X96`, `POOL_HOOK_DATA`
+- flags: `BEFORE_SWAP=true`, `AFTER_SWAP=true`, all others `false`
+
+### Local anvil
+
+```bash
+cd contracts
+npm run anvil
+npm run deploy:stealth:anvil:init-pool
+```
+
+### Sepolia
+
+```bash
+cd contracts
+npm run deploy:stealth:sepolia:init-pool
+```
+
+### Broadcast artifacts (for submission TxIDs)
+
+`forge script ... --broadcast` writes artifacts under `broadcast/<ScriptName>/<chainId>/run-latest.json`.
+Use this file to recover deployment/initialize tx hashes and resolved addresses for hackathon judge deliverables.
+
+### Known mining/permission pitfalls
+
+- If `getHookPermissions()` changes, the hook address bit pattern changes; re-mine salt/address before deploy.
+- If you add `afterInitialize` later for start-block anchoring, update flags and re-mine again.
+- `StealthBaseHook` calls `Hooks.validateHookPermissions(...)`; wrong address bits/flags can fail deployment or callback routing.
+- `constructorArgs` passed into `HookMiner.find(...)` must exactly match the deployed constructor args (types/order/values).
+- Use the actual deployer address used for CREATE2 and the real network `POOL_MANAGER_ADDR` for your target chain.
+- If `USE_RUNTIME_START_BLOCK=true`, `startBlock` is taken from the current RPC block and is stable only for that run's mined constructor args.
+- If `USE_RUNTIME_START_BLOCK=false`, the fixed `START_BLOCK` value is used and must be chosen intentionally for your demo timeline.
 
 ## Deploying to Testnets
 

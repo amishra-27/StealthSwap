@@ -29,7 +29,13 @@ import {StealthBatchMath} from "./StealthBatchMath.sol";
 contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
 
+    /// REVIEW REQUIRED:
+    /// - Pool-scoping and access control are central safety boundaries for hook-integrated funds logic.
+    /// - Re-check pool-specific assumptions against Uniswap v4 hooks lifecycle before production use.
     error InvalidPool();
+    error AllowedPoolNotConfigured();
+    error AllowedPoolAlreadyConfigured();
+    error UnauthorizedPoolConfiguration();
     error MaxIntentsZero();
     error MinAmountZero();
     error UnknownWindow();
@@ -75,7 +81,9 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     uint16 public immutable maxIntentsPerWindow;
     uint128 public immutable minAmountIn;
     bool public immutable zeroForOneDirection;
-    PoolId public immutable allowedPoolId;
+    address public immutable hookOwner;
+    PoolId public allowedPoolId;
+    bool public allowedPoolConfigured;
 
     // Pool-scoped data model (single-pool MVP uses `allowedPoolId` only).
     mapping(PoolId => mapping(uint64 => WindowState)) internal windows;
@@ -94,6 +102,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     );
     event WindowCleared(PoolId indexed poolId, uint64 indexed windowId, uint256 totalIn, uint256 totalOut);
     event Claimed(PoolId indexed poolId, uint64 indexed windowId, uint256 indexed intentId, address user, uint256 amountOut);
+    event AllowedPoolConfigured(PoolId indexed poolId, address indexed configuredBy);
     event IntentCancelled(
         PoolId indexed poolId, uint64 indexed windowId, uint256 indexed intentId, address user, uint128 amountIn
     );
@@ -101,7 +110,6 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
 
     constructor(
         IPoolManager _poolManager,
-        PoolId _allowedPoolId,
         uint64 _startBlock,
         uint64 _blocksPerWindow,
         uint64 _cancelDelayBlocks,
@@ -112,11 +120,25 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         if (_maxIntentsPerWindow == 0) revert MaxIntentsZero();
         if (_minAmountIn == 0) revert MinAmountZero();
 
-        allowedPoolId = _allowedPoolId;
+        hookOwner = msg.sender;
         cancelDelayBlocks = _cancelDelayBlocks;
         maxIntentsPerWindow = _maxIntentsPerWindow;
         minAmountIn = _minAmountIn;
         zeroForOneDirection = _zeroForOneDirection;
+    }
+
+    /// @notice Set allowed pool exactly once after deployment, before queue/clear/claim use.
+    /// REVIEW REQUIRED:
+    /// - Deployment flow must call this once with the initialized poolId.
+    /// - If role model changes (factory/deployer), revisit authorization and initialization sequence.
+    function setAllowedPoolIdOnce(PoolId _allowedPoolId) external {
+        if (msg.sender != hookOwner) revert UnauthorizedPoolConfiguration();
+        if (allowedPoolConfigured) revert AllowedPoolAlreadyConfigured();
+        if (PoolId.unwrap(_allowedPoolId) == bytes32(0)) revert InvalidPool();
+
+        allowedPoolId = _allowedPoolId;
+        allowedPoolConfigured = true;
+        emit AllowedPoolConfigured(_allowedPoolId, msg.sender);
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -142,12 +164,14 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     }
 
     function getWindow(uint64 windowId) external view returns (WindowState memory) {
-        return windows[allowedPoolId][windowId];
+        PoolId poolId = _requireAllowedPoolConfigured();
+        return windows[poolId][windowId];
     }
 
     function getIntent(uint64 windowId, uint256 intentId) external view returns (SwapIntent memory) {
-        if (intentId >= intentsByPoolAndWindow[allowedPoolId][windowId].length) revert InvalidIntentId();
-        return intentsByPoolAndWindow[allowedPoolId][windowId][intentId];
+        PoolId poolId = _requireAllowedPoolConfigured();
+        if (intentId >= intentsByPoolAndWindow[poolId][windowId].length) revert InvalidIntentId();
+        return intentsByPoolAndWindow[poolId][windowId][intentId];
     }
 
     function queueSwapExactIn(uint128 amountIn, uint128 minOut, address recipient)
@@ -158,7 +182,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         if (recipient == address(0)) revert RecipientZero();
         if (amountIn < minAmountIn) revert AmountTooSmall();
 
-        PoolId poolId = allowedPoolId;
+        PoolId poolId = _requireAllowedPoolConfigured();
         windowId = getCurrentWindowId();
         if (hasQueuedIntent[poolId][windowId][msg.sender]) revert AlreadyQueuedInWindow();
 
@@ -190,7 +214,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     /// @dev No loops over intents here; settlement remains pull-based in `claim`.
     /// REVIEW REQUIRED: replace placeholder 1:1 accounting with real AsyncSwap/custom accounting execution path.
     function clear(uint64 windowId) external nonReentrant {
-        PoolId poolId = allowedPoolId;
+        PoolId poolId = _requireAllowedPoolConfigured();
         WindowState storage window = windows[poolId][windowId];
         if (window.intentCount == 0) revert UnknownWindow();
         if (window.cleared) revert WindowAlreadyCleared();
@@ -207,7 +231,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     }
 
     function claim(uint64 windowId, uint256 intentId) external nonReentrant returns (uint256 amountOut) {
-        PoolId poolId = allowedPoolId;
+        PoolId poolId = _requireAllowedPoolConfigured();
         WindowState storage window = windows[poolId][windowId];
         if (!window.cleared) revert WindowNotCleared();
         if (intentId >= intentsByPoolAndWindow[poolId][windowId].length) revert InvalidIntentId();
@@ -233,7 +257,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     }
 
     function cancelUncleared(uint64 windowId, uint256 intentId) external nonReentrant {
-        PoolId poolId = allowedPoolId;
+        PoolId poolId = _requireAllowedPoolConfigured();
         WindowState storage window = windows[poolId][windowId];
         if (window.intentCount == 0) revert UnknownWindow();
         if (window.cleared) revert WindowAlreadyCleared();
@@ -265,7 +289,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     function sweepDust(uint64 windowId, address to) external nonReentrant returns (uint256 amountOut) {
         if (to == address(0)) revert SweepRecipientZero();
 
-        PoolId poolId = allowedPoolId;
+        PoolId poolId = _requireAllowedPoolConfigured();
         WindowState storage window = windows[poolId][windowId];
         if (!window.cleared) revert WindowNotCleared();
         if (window.dustSwept) revert DustAlreadySwept();
@@ -290,7 +314,8 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         override
         returns (bytes4)
     {
-        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(allowedPoolId)) revert InvalidPool();
+        PoolId poolId = _requireAllowedPoolConfigured();
+        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(poolId)) revert InvalidPool();
         beforeSwapCount[key.toId()]++;
         return IHooks.beforeSwap.selector;
     }
@@ -301,7 +326,8 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         override
         returns (bytes4)
     {
-        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(allowedPoolId)) revert InvalidPool();
+        PoolId poolId = _requireAllowedPoolConfigured();
+        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(poolId)) revert InvalidPool();
         afterSwapCount[key.toId()]++;
         return IHooks.afterSwap.selector;
     }
@@ -313,5 +339,10 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     function _computeWindowTotalOut(PoolId, uint64, uint256 totalIn) internal view virtual returns (uint256 totalOut) {
         // Minimal end-to-end placeholder to keep clear/claim operational for MVP demos.
         totalOut = totalIn;
+    }
+
+    function _requireAllowedPoolConfigured() internal view returns (PoolId poolId) {
+        if (!allowedPoolConfigured) revert AllowedPoolNotConfigured();
+        poolId = allowedPoolId;
     }
 }

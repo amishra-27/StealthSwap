@@ -7,8 +7,11 @@ library HookMiner {
     // mask to slice out the top 12 bits of the address
     uint160 constant FLAG_MASK = 0xFFF << 148;
 
-    // Maximum number of iterations to find a salt, avoid infinite loops
-    uint256 constant MAX_LOOP = 20_000;
+    // REVIEW REQUIRED:
+    // Uniswap v4 hook deployment requires address bit-mining for permissions/flags.
+    // Docs: https://docs.uniswap.org/contracts/v4/guides/hooks/hook-deployment
+    // Increase search bound to reduce false negatives in script-based mining loops.
+    uint256 constant MAX_LOOP = 500_000;
 
     /// @notice Find a salt that produces a hook address with the desired `flags`
     /// @param deployer The address that will deploy the hook. In `forge test`, this will be the test contract `address(this)` or the pranking address

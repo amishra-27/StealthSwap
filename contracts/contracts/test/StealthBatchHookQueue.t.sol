@@ -16,13 +16,13 @@ contract StealthBatchHookQueueTest is Test {
     function setUp() public {
         uint160 flags = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
         bytes memory constructorArgs =
-            abi.encode(IPoolManager(address(1)), ALLOWED_POOL_ID, uint64(0), uint64(100), uint64(0), uint16(10), uint128(1), true);
+            abi.encode(IPoolManager(address(1)), uint64(0), uint64(100), uint64(0), uint16(10), uint128(1), true);
 
         (address hookAddress, bytes32 salt) =
             HookMiner.find(address(this), flags, type(StealthBatchHook).creationCode, constructorArgs);
 
-        hook =
-            new StealthBatchHook{salt: salt}(IPoolManager(address(1)), ALLOWED_POOL_ID, 0, 100, 0, 10, 1, true);
+        hook = new StealthBatchHook{salt: salt}(IPoolManager(address(1)), 0, 100, 0, 10, 1, true);
+        hook.setAllowedPoolIdOnce(ALLOWED_POOL_ID);
         require(address(hook) == hookAddress, "StealthBatchHookQueueTest: hook address mismatch");
     }
 

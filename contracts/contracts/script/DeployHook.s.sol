@@ -3,7 +3,6 @@ pragma solidity ^0.8.19;
 
 import "../lib/forge-std/src/Script.sol";
 import {Hooks} from "../lib/v4-core/src/libraries/Hooks.sol";
-import {PoolId} from "../lib/v4-core/src/types/PoolId.sol";
 import {HookMiner} from "../test/utils/HookMiner.sol";
 
 contract DeployHookScript is Script {
@@ -49,7 +48,6 @@ contract DeployHookScript is Script {
         if (_eq(hookContract, "StealthBatchHook.sol:StealthBatchHook")) {
             return abi.encode(
                 manager,
-                PoolId.wrap(vm.envBytes32("ALLOWED_POOL_ID")),
                 uint64(vm.envUint("START_BLOCK")),
                 uint64(vm.envUint("BLOCKS_PER_WINDOW")),
                 uint64(vm.envUint("CANCEL_DELAY_BLOCKS")),
