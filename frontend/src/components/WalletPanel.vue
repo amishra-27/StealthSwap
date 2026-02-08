@@ -21,6 +21,7 @@ import {
   targetChain,
   walletClient,
 } from "../lib/viem/clients";
+import { pushToast } from "../lib/ui/toast";
 
 const emit = defineEmits<{
   connected: [address: Address | null];
@@ -91,6 +92,7 @@ async function connectWallet(): Promise<void> {
       throw new ChainMismatchError(chainId.value);
     }
     message.value = "Wallet connected.";
+    pushToast("Wallet connected on Sepolia.", "success");
   } catch (error) {
     if (error instanceof WalletProviderError || error instanceof ChainMismatchError) {
       message.value = error.message;
@@ -115,6 +117,7 @@ async function switchToSepolia(): Promise<void> {
     await walletClient.switchChain({ id: TARGET_CHAIN_ID });
     chainId.value = TARGET_CHAIN_ID;
     message.value = `Switched to ${targetChain.name}.`;
+    pushToast(`Network switched to ${targetChain.name}.`, "success");
     await refreshWalletState(true);
   } catch (error) {
     const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
@@ -137,6 +140,7 @@ async function switchToSepolia(): Promise<void> {
         await walletClient.switchChain({ id: TARGET_CHAIN_ID });
         chainId.value = TARGET_CHAIN_ID;
         message.value = `Switched to ${targetChain.name}.`;
+        pushToast(`Network switched to ${targetChain.name}.`, "success");
         await refreshWalletState(true);
       } catch (addError) {
         message.value = addError instanceof Error ? addError.message : "Failed to add/switch chain.";
@@ -178,100 +182,40 @@ onUnmounted(() => {
 
 <template>
   <div class="panel">
-    <div class="actions">
-      <button type="button" class="button" :disabled="busy" @click="connectWallet">
+    <div class="button-row">
+      <button type="button" class="btn btn-primary" :disabled="busy" @click="connectWallet">
         {{ busy ? "Connecting..." : "Connect Wallet" }}
       </button>
       <button
         v-if="wrongChain"
         type="button"
-        class="button button-secondary"
+        class="btn"
         :disabled="busy"
         @click="switchToSepolia"
       >
         Switch to Sepolia
       </button>
     </div>
-    <dl class="details">
-      <div>
-        <dt>Address</dt>
-        <dd>{{ shortAccount }}</dd>
+    <div class="signed-info">
+      <p class="helper-text">
+        You will sign wallet prompts only for connect and network-switch requests.
+      </p>
+    </div>
+    <dl class="metric-grid">
+      <div class="metric">
+        <span class="metric-label">Address</span>
+        <span class="metric-value mono">{{ shortAccount }}</span>
       </div>
-      <div>
-        <dt>Chain ID</dt>
-        <dd>{{ chainId ?? "Unknown" }}</dd>
+      <div class="metric">
+        <span class="metric-label">Chain ID</span>
+        <span class="metric-value mono">{{ chainId ?? "Unknown" }}</span>
       </div>
-      <div>
-        <dt>Network</dt>
-        <dd>{{ formatChainLabel(chainId) }}</dd>
+      <div class="metric">
+        <span class="metric-label">Network</span>
+        <span class="metric-value">{{ formatChainLabel(chainId) }}</span>
       </div>
     </dl>
-    <p v-if="wrongChain" class="warning">Wrong chain detected. Switch wallet to Sepolia.</p>
-    <p class="message">{{ message }}</p>
+    <p v-if="wrongChain" class="callout">Wrong chain detected. Switch wallet to Sepolia.</p>
+    <p class="status-line">{{ message }}</p>
   </div>
 </template>
-
-<style scoped>
-.panel {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.actions {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.button {
-  border: 1px solid #222;
-  background: #101010;
-  color: #fff;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.4rem;
-  font: inherit;
-  cursor: pointer;
-}
-
-.button:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.button-secondary {
-  background: #ffffff;
-  color: #111;
-}
-
-.details {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
-}
-
-dt {
-  font-size: 0.8rem;
-  color: #5b5b5b;
-}
-
-dd {
-  margin: 0;
-  font-weight: 600;
-}
-
-.message {
-  margin: 0;
-  font-size: 0.9rem;
-}
-
-.warning {
-  margin: 0;
-  font-size: 0.9rem;
-  color: #9e3b00;
-}
-
-@media (max-width: 720px) {
-  .details {
-    grid-template-columns: repeat(1, minmax(0, 1fr));
-  }
-}
-</style>

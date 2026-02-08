@@ -26,6 +26,8 @@ export const TARGET_CHAIN_ID = targetChain.id;
 
 export const sepoliaRpcUrl =
   import.meta.env.PUBLIC_SEPOLIA_RPC_URL ?? DEFAULT_SEPOLIA_RPC_URL;
+export const explorerBaseUrl =
+  targetChain.blockExplorers?.default?.url ?? "https://sepolia.etherscan.io";
 
 export const publicClient = createPublicClient({
   chain: targetChain,

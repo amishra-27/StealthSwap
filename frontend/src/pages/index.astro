@@ -12,142 +12,94 @@ import MyIntents from "../components/MyIntents.vue";
 import QueueSwapForm from "../components/QueueSwapForm.vue";
 import WalletPanel from "../components/WalletPanel.vue";
 import WindowStatus from "../components/WindowStatus.vue";
+import AppShell from "../layouts/AppShell.astro";
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VeilSwap - Uniswap v4 Privacy DeFi</title>
-  </head>
-  <body>
-    <main class="layout">
-      <header class="hero">
-        <p class="kicker">Stealth Batching Interface</p>
-        <h1>VeilSwap (Uniswap v4 Privacy DeFi)</h1>
-      </header>
-
-      <section class="card">
-        <h2>1) Connect Wallet</h2>
+<AppShell
+  title="StealthSwap - Uniswap v4 Privacy DeFi"
+  subtitle="Deterministic batching for swaps: reduce timing leakage, settle pro-rata, and claim verifiable outputs."
+  pageId="swap"
+>
+  <section class="workflow-layout" id="queue-workflow">
+    <section class="workflow-main">
+      <article class="glass-card" id="step-1">
+        <div class="section-row">
+          <h2 class="section-title"><span class="step-index">1</span>Queue Into Batch</h2>
+          <span class="chip chip-queued">Signature Required</span>
+        </div>
+        <p class="section-note">
+          Connect wallet, set your limits, and queue your order into the active batch window.
+        </p>
         <WalletPanel client:load />
-      </section>
-
-      <section class="card">
-        <h2>2) Current Window Status</h2>
-        <WindowStatus client:load />
-      </section>
-
-      <section class="card">
-        <h2>3) Queue a Swap</h2>
         <QueueSwapForm client:load />
-      </section>
+      </article>
 
-      <section class="card">
-        <h2>4) Window Details</h2>
-        <p>
-          The status panel above includes window accounting fields (`totalIn`, `cleared`, and
-          `totalOut` once cleared) from the VeilBatchHook contract.
+      <article class="glass-card" id="step-2">
+        <div class="section-row">
+          <h2 class="section-title"><span class="step-index">2</span>Batch Window</h2>
+          <span class="chip chip-clearable">Deterministic Rules</span>
+        </div>
+        <p class="section-note">
+          Track current window timing and deterministic transition: Collecting to Clearable to Settled.
         </p>
-      </section>
+        <WindowStatus client:load />
+      </article>
 
-      <section class="card">
-        <h2>5) Claim Panel</h2>
+      <article class="glass-card" id="step-3">
+        <div class="section-row">
+          <h2 class="section-title"><span class="step-index">3</span>After Clear</h2>
+          <span class="chip chip-cleared">Pro-Rata Settlement</span>
+        </div>
+        <ul class="rule-list">
+          <li>Claim Output after window clear.</li>
+          <li>Pro-rata distribution normalizes execution impact across intents.</li>
+          <li>
+            Sweep Dust means unallocated remainder after floor rounding, handled transparently in the
+            contract.
+          </li>
+        </ul>
+      </article>
+
+      <article class="glass-card" id="step-4">
+        <div class="section-row">
+          <h2 class="section-title"><span class="step-index">4</span>Activity</h2>
+          <span class="chip chip-success">Your Intents + Recent Clears</span>
+        </div>
+        <p class="section-note">
+          Review queued/clearable/claimed states, inspect claimable estimates, and claim output.
+        </p>
         <MyIntents client:load />
-      </section>
+      </article>
+    </section>
 
-      <section class="card how">
-        <h2>How it works</h2>
-        <p>
-          VeilSwap queues intents into N-block windows through a Uniswap v4 hook, then settles and
-          distributes output pro-rata after clearing. Read:
-          <a href="https://docs.uniswap.org/contracts/v4/concepts/hooks" target="_blank" rel="noreferrer">Hooks</a>,
-          <a href="https://docs.uniswap.org/contracts/v4/overview" target="_blank" rel="noreferrer">PoolManager lifecycle</a>,
-          and
-          <a href="https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap" target="_blank" rel="noreferrer">AsyncSwap/custom accounting</a>.
+    <aside class="secondary-panel">
+      <article class="glass-card">
+        <h3 class="section-title">How StealthSwap Protects You</h3>
+        <ul class="bullet-list">
+          <li>Batching reduces per-user swap signature and timing leakage.</li>
+          <li>Pro-rata settlement normalizes execution impact inside each window.</li>
+          <li>Deterministic onchain rules are verifiable end-to-end.</li>
+        </ul>
+      </article>
+
+      <article class="glass-card">
+        <h3 class="section-title">Execution Model</h3>
+        <p class="section-note">
+          Hook-attached pool behavior governs queue, clear, and claim lifecycle with no hidden
+          offchain matching logic.
         </p>
-      </section>
-    </main>
-  </body>
-</html>
-
-<style>
-  :root {
-    --bg: #f5f6f8;
-    --panel: #ffffff;
-    --ink: #171717;
-    --muted: #4a4a4a;
-    --line: #dadce3;
-  }
-
-  * {
-    box-sizing: border-box;
-  }
-
-  body {
-    margin: 0;
-    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-    color: var(--ink);
-    background:
-      radial-gradient(circle at 20% 10%, #fff, #f0f2f8 35%, #e8ebf2 100%);
-  }
-
-  .layout {
-    width: min(980px, 92vw);
-    margin: 2rem auto 3rem;
-    display: grid;
-    gap: 1rem;
-  }
-
-  .hero {
-    padding: 1rem 1.25rem;
-    border: 1px solid var(--line);
-    border-radius: 0.8rem;
-    background: linear-gradient(120deg, #ffffff, #f0f5ff);
-  }
-
-  .hero h1 {
-    margin: 0.25rem 0 0;
-    font-size: clamp(1.35rem, 2.4vw, 2rem);
-    line-height: 1.2;
-  }
-
-  .kicker {
-    margin: 0;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #41618e;
-    font-size: 0.72rem;
-    font-weight: 700;
-  }
-
-  .card {
-    border: 1px solid var(--line);
-    border-radius: 0.8rem;
-    background: var(--panel);
-    padding: 1rem 1.1rem;
-    display: grid;
-    gap: 0.6rem;
-  }
-
-  .card h2 {
-    margin: 0;
-    font-size: 1.05rem;
-  }
-
-  .card p {
-    margin: 0;
-    color: var(--muted);
-    line-height: 1.45;
-  }
-
-  .how a {
-    color: #134a89;
-  }
-
-  @media (max-width: 640px) {
-    .layout {
-      margin: 1rem auto 1.5rem;
-    }
-  }
-</style>
+        <div class="button-row">
+          <a class="micro-link" href="https://docs.uniswap.org/contracts/v4/concepts/hooks" target="_blank" rel="noreferrer">
+            Hooks
+          </a>
+          <a class="micro-link" href="https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap" target="_blank" rel="noreferrer">
+            AsyncSwap
+          </a>
+          <a class="micro-link" href="https://docs.uniswap.org/contracts/v4/overview" target="_blank" rel="noreferrer">
+            PoolManager Lifecycle
+          </a>
+        </div>
+      </article>
+    </aside>
+  </section>
+</AppShell>

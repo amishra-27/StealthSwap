@@ -5,12 +5,12 @@ Docs references:
 - Uniswap v4 hooks concept (pool-scoped hook execution): https://docs.uniswap.org/contracts/v4/concepts/hooks
 - Uniswap v4 PoolManager lifecycle overview: https://docs.uniswap.org/contracts/v4/overview
 - Uniswap v4 AsyncSwap/custom accounting context: https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap
-  Rationale: intents clear after a batching window, so the UI tracks window progress and remaining blocks.
+  Rationale: intents are deferred into windows, so phase transitions are first-class UI state.
 - OpenZeppelin Uniswap Hooks base contracts: not used in this frontend component.
 */
 
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { getContract } from "viem";
-import { onMounted, onUnmounted, ref } from "vue";
 
 import { stealthBatchHookAbi } from "../abi/stealthBatchHookAbi";
 import {
@@ -20,21 +20,42 @@ import {
 } from "../lib/viem/contractConfig";
 import { publicClient } from "../lib/viem/clients";
 
+type BatchPhase = "Collecting" | "Clearable" | "Cleared" | "Settled";
+
 const address = getVeilBatchHookAddress();
+const phaseOrder: BatchPhase[] = ["Collecting", "Clearable", "Cleared", "Settled"];
 
 const blockNumber = ref<bigint | null>(null);
 const windowId = ref<bigint | null>(null);
-const endBlock = ref<bigint | null>(null);
 const blocksRemaining = ref<bigint | null>(null);
-const message = ref("Loading window state...");
+const phase = ref<BatchPhase>("Collecting");
+const phaseHint = ref("Collecting intents in active window.");
+const previousWindowId = ref<bigint | null>(null);
+const previousWindowCleared = ref<boolean | null>(null);
+const previousWindowSettled = ref<boolean | null>(null);
 const busy = ref(false);
+const message = ref("Tracking batch window...");
 let intervalId: number | undefined;
+
+const phaseIndex = computed(() => phaseOrder.indexOf(phase.value));
 
 function addressError(): string {
   if (!import.meta.env.PUBLIC_VEIL_BATCH_HOOK_ADDRESS) {
     return MISSING_CONTRACT_ADDRESS_MESSAGE;
   }
   return INVALID_CONTRACT_ADDRESS_MESSAGE;
+}
+
+function updatePhaseHints(nextPhase: BatchPhase): void {
+  if (nextPhase === "Collecting") {
+    phaseHint.value = "Current batch window is collecting intents.";
+  } else if (nextPhase === "Clearable") {
+    phaseHint.value = "Previous window ended and can now be cleared.";
+  } else if (nextPhase === "Cleared") {
+    phaseHint.value = "Window cleared. Claims are now being processed.";
+  } else {
+    phaseHint.value = "Previous window is fully settled.";
+  }
 }
 
 async function refresh(): Promise<void> {
@@ -59,14 +80,40 @@ async function refresh(): Promise<void> {
 
     blockNumber.value = latestBlock;
 
-    const activeWindowId = latestBlock >= startBlock ? (latestBlock - startBlock) / blocksPerWindow : 0n;
+    const activeWindowId =
+      latestBlock >= startBlock ? (latestBlock - startBlock) / blocksPerWindow : 0n;
+    const endBlock = startBlock + (activeWindowId + 1n) * blocksPerWindow - 1n;
+    const remaining = endBlock >= latestBlock ? endBlock - latestBlock + 1n : 0n;
 
     windowId.value = activeWindowId;
-    endBlock.value = startBlock + (activeWindowId + 1n) * blocksPerWindow - 1n;
-    blocksRemaining.value =
-      endBlock.value >= latestBlock ? endBlock.value - latestBlock + 1n : 0n;
+    blocksRemaining.value = remaining;
 
-    message.value = "Window status updated.";
+    let nextPhase: BatchPhase = "Collecting";
+    previousWindowId.value = null;
+    previousWindowCleared.value = null;
+    previousWindowSettled.value = null;
+
+    if (activeWindowId > 0n) {
+      const prevId = activeWindowId - 1n;
+      const previousWindow = await contract.read.getWindow([prevId]);
+      previousWindowId.value = prevId;
+      previousWindowCleared.value = previousWindow.cleared;
+      previousWindowSettled.value =
+        previousWindow.cleared &&
+        (previousWindow.totalOut === 0n || previousWindow.claimedOutSum >= previousWindow.totalOut);
+
+      if (!previousWindow.cleared) {
+        nextPhase = "Clearable";
+      } else if (previousWindowSettled.value) {
+        nextPhase = "Settled";
+      } else {
+        nextPhase = "Cleared";
+      }
+    }
+
+    phase.value = nextPhase;
+    updatePhaseHints(nextPhase);
+    message.value = "Window status synced.";
   } catch (error) {
     message.value = error instanceof Error ? error.message : "Failed to load window state.";
   } finally {
@@ -90,27 +137,52 @@ onUnmounted(() => {
 
 <template>
   <div class="panel">
-    <div class="actions">
-      <button class="button" type="button" :disabled="busy" @click="refresh">
-        {{ busy ? "Refreshing..." : "Refresh" }}
+    <div class="button-row">
+      <button class="btn" type="button" :disabled="busy" @click="refresh">
+        {{ busy ? "Refreshing..." : "Refresh Window" }}
       </button>
+      <span class="chip" :class="`chip-${phase.toLowerCase()}`">{{ phase }}</span>
     </div>
 
-    <dl class="stats">
-      <div>
-        <dt>Block Number</dt>
-        <dd>{{ blockNumber ?? "—" }}</dd>
+    <dl class="metric-grid">
+      <div class="metric">
+        <span class="metric-label">Current Block</span>
+        <span class="metric-value mono pulse-number" :key="`block-${blockNumber}`">
+          {{ blockNumber ?? "—" }}
+        </span>
       </div>
-      <div>
-        <dt>Window ID</dt>
-        <dd>{{ windowId ?? "—" }}</dd>
+      <div class="metric">
+        <span class="metric-label">Current Window ID</span>
+        <span class="metric-value mono">{{ windowId ?? "—" }}</span>
       </div>
-      <div>
-        <dt>Countdown (blocks)</dt>
-        <dd>{{ blocksRemaining ?? "—" }}</dd>
+      <div class="metric">
+        <span class="metric-label">Blocks Remaining</span>
+        <span class="metric-value mono pulse-number" :key="`remaining-${blocksRemaining}`">
+          {{ blocksRemaining ?? "—" }}
+        </span>
       </div>
     </dl>
-    <p class="message">{{ message }}</p>
+
+    <div class="timeline">
+      <article
+        v-for="(step, idx) in ['Collecting', 'Clearable', 'Cleared', 'Settled']"
+        :key="step"
+        class="timeline-step"
+        :class="{ 'is-done': idx < phaseIndex, 'is-active': idx === phaseIndex }"
+      >
+        <p>Phase</p>
+        <strong>{{ step }}</strong>
+      </article>
+    </div>
+
+    <p class="status-line">{{ phaseHint }}</p>
+    <p class="helper-text">
+      Previous window:
+      {{ previousWindowId ?? "—" }} / cleared:
+      {{ previousWindowCleared === null ? "—" : previousWindowCleared ? "yes" : "no" }} / settled:
+      {{ previousWindowSettled === null ? "—" : previousWindowSettled ? "yes" : "no" }}
+    </p>
+    <p class="status-line">{{ message }}</p>
   </div>
 </template>
 
@@ -120,44 +192,18 @@ onUnmounted(() => {
   gap: 0.75rem;
 }
 
-.actions {
-  display: flex;
-  gap: 0.75rem;
+.pulse-number {
+  animation: pulseIn 380ms ease;
 }
 
-.button {
-  border: 1px solid #222;
-  background: #101010;
-  color: #fff;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.4rem;
-  font: inherit;
-  cursor: pointer;
-}
-
-.button:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem 1rem;
-}
-
-dt {
-  font-size: 0.8rem;
-  color: #5b5b5b;
-}
-
-dd {
-  margin: 0;
-  font-weight: 600;
-}
-
-.message {
-  margin: 0;
-  font-size: 0.9rem;
+@keyframes pulseIn {
+  0% {
+    opacity: 0.55;
+    transform: translateY(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>

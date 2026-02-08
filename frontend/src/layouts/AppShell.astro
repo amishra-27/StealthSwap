@@ -1,0 +1,71 @@
+---
+/*
+Docs references:
+- Astro islands (`client:load`): https://docs.astro.build/en/concepts/islands/
+- Uniswap v4 hooks concept (pool-scoped hook execution): https://docs.uniswap.org/contracts/v4/concepts/hooks
+- Uniswap v4 PoolManager lifecycle overview: https://docs.uniswap.org/contracts/v4/overview
+- Uniswap v4 AsyncSwap/custom accounting context: https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap
+- OpenZeppelin Uniswap Hooks base contracts: not used in this frontend layout.
+*/
+
+import NetworkWalletBadge from "../components/NetworkWalletBadge.vue";
+import ToastViewport from "../components/ToastViewport.vue";
+import "../styles/design-system.css";
+
+interface Props {
+  title: string;
+  subtitle: string;
+  pageId?: "swap" | "admin";
+}
+
+const { title, subtitle, pageId = "swap" } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <a href="/" class="brand-link">
+            <span class="brand-mark" aria-hidden="true"></span>
+            StealthSwap
+          </a>
+
+          <nav class="nav-links" aria-label="Primary">
+            <a class="nav-link" href="/" aria-current={pageId === "swap" ? "page" : undefined}>
+              Swap Workflow
+            </a>
+            <a class="nav-link" href="/admin" aria-current={pageId === "admin" ? "page" : undefined}>
+              Executor
+            </a>
+            <a class="nav-link" href="https://docs.uniswap.org/contracts/v4/concepts/hooks" target="_blank" rel="noreferrer">
+              Hooks Docs
+            </a>
+          </nav>
+
+          <div class="topbar-meta">
+            <NetworkWalletBadge client:load />
+          </div>
+        </div>
+      </header>
+
+      <main class="main-container">
+        <section class="hero-panel">
+          <p class="hero-kicker">Privacy-Aware Batch Execution</p>
+          <h1 class="hero-title">{title}</h1>
+          <p class="hero-subtitle">{subtitle}</p>
+        </section>
+
+        <slot />
+      </main>
+    </div>
+
+    <ToastViewport client:load />
+  </body>
+</html>

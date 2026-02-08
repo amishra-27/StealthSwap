@@ -17,6 +17,7 @@ import { onMounted, ref } from "vue";
 import {
   ChainMismatchError,
   WalletProviderError,
+  explorerBaseUrl,
   getVeilBatchContract,
   publicClient,
   walletClient,
@@ -26,6 +27,7 @@ import {
   MISSING_CONTRACT_ADDRESS_MESSAGE,
   getVeilBatchHookAddress,
 } from "../lib/viem/contractConfig";
+import { pushToast } from "../lib/ui/toast";
 
 const address = getVeilBatchHookAddress();
 const MAX_UINT128 = (1n << 128n) - 1n;
@@ -38,6 +40,7 @@ const busy = ref(false);
 const message = ref("Enter raw token units and queue your swap intent.");
 const txHash = ref<string | null>(null);
 const pending = ref(false);
+const txExplorerUrl = ref<string | null>(null);
 
 function addressError(): string {
   if (!import.meta.env.PUBLIC_VEIL_BATCH_HOOK_ADDRESS) {
@@ -78,6 +81,7 @@ async function hydrateDefaultRecipient(): Promise<void> {
 
 async function queueSwap(): Promise<void> {
   txHash.value = null;
+  txExplorerUrl.value = null;
   pending.value = false;
   if (!address) {
     message.value = addressError();
@@ -109,8 +113,10 @@ async function queueSwap(): Promise<void> {
       { account },
     );
     txHash.value = hash;
+    txExplorerUrl.value = `${explorerBaseUrl}/tx/${hash}`;
     pending.value = true;
     message.value = "Transaction submitted. Waiting for confirmation...";
+    pushToast("Swap queued. Waiting for confirmation.", "info");
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== "success") {
@@ -118,6 +124,7 @@ async function queueSwap(): Promise<void> {
     }
     pending.value = false;
     message.value = "Swap intent confirmed.";
+    pushToast("Swap intent confirmed.", "success");
     window.dispatchEvent(new CustomEvent(INTENTS_REFRESH_EVENT));
   } catch (error) {
     pending.value = false;
@@ -125,8 +132,10 @@ async function queueSwap(): Promise<void> {
       message.value = error.message;
     } else if (error instanceof Error) {
       message.value = error.message;
+      pushToast(error.message, "error");
     } else {
       message.value = "Failed to queue swap.";
+      pushToast("Failed to queue swap.", "error");
     }
   } finally {
     busy.value = false;
@@ -140,25 +149,42 @@ onMounted(() => {
 
 <template>
   <form class="panel" @submit.prevent="queueSwap">
-    <p class="warning">This is a hackathon demo. Review contract before using real funds.</p>
-    <label>
-      <span>Amount In (uint128)</span>
-      <input v-model="amountIn" inputmode="numeric" placeholder="1000000" />
-    </label>
-    <label>
-      <span>Min Out (uint128)</span>
-      <input v-model="minOut" inputmode="numeric" placeholder="950000" />
-    </label>
-    <label>
-      <span>Recipient (default: connected wallet)</span>
-      <input v-model="recipient" placeholder="0x..." />
-    </label>
-    <button class="button" type="submit" :disabled="busy">
-      {{ busy ? (pending ? "Pending..." : "Submitting...") : "Queue Swap" }}
-    </button>
-    <p v-if="pending" class="pending">Pending: intent submitted, waiting for confirmation.</p>
-    <p class="message">{{ message }}</p>
-    <p v-if="txHash" class="tx">Tx: {{ txHash }}</p>
+    <p class="callout">This is a hackathon demo. Review contract before using real funds.</p>
+    <div class="signed-info">
+      <p class="helper-text">
+        You will sign one transaction for <span class="mono">queueSwapExactIn(amountIn, minOut, recipient)</span>.
+      </p>
+    </div>
+    <div class="field-grid">
+      <label class="field">
+        <span class="field-label">Amount In</span>
+        <input class="input mono" v-model="amountIn" inputmode="numeric" placeholder="1000000" />
+        <span class="field-help">Raw token units (uint128)</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Min Out</span>
+        <input class="input mono" v-model="minOut" inputmode="numeric" placeholder="950000" />
+        <span class="field-help">Slippage guard floor (uint128)</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Recipient</span>
+        <input class="input mono" v-model="recipient" placeholder="0x..." />
+        <span class="field-help">Defaults to connected wallet if left blank.</span>
+      </label>
+    </div>
+    <div class="button-row">
+      <button class="btn btn-primary" type="submit" :disabled="busy">
+        {{ busy ? (pending ? "Pending..." : "Queueing...") : "Queue Swap" }}
+      </button>
+      <span v-if="pending" class="chip chip-warning">Pending Confirmation</span>
+    </div>
+    <p class="status-line">{{ message }}</p>
+    <p v-if="txHash" class="helper-text mono">
+      Tx:
+      <a class="micro-link" :href="txExplorerUrl ?? '#'" target="_blank" rel="noreferrer">
+        {{ txHash }}
+      </a>
+    </p>
   </form>
 </template>
 
@@ -166,60 +192,5 @@ onMounted(() => {
 .panel {
   display: grid;
   gap: 0.75rem;
-}
-
-.warning {
-  margin: 0;
-  padding: 0.55rem 0.65rem;
-  border: 1px solid #f2c28b;
-  border-radius: 0.4rem;
-  background: #fff6ec;
-  color: #834100;
-  font-size: 0.88rem;
-}
-
-label {
-  display: grid;
-  gap: 0.35rem;
-}
-
-span {
-  font-size: 0.85rem;
-  color: #404040;
-}
-
-input {
-  border: 1px solid #c8c8c8;
-  border-radius: 0.4rem;
-  padding: 0.55rem 0.6rem;
-  font: inherit;
-}
-
-.button {
-  border: 1px solid #222;
-  background: #101010;
-  color: #fff;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.4rem;
-  font: inherit;
-  cursor: pointer;
-}
-
-.button:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.message,
-.tx {
-  margin: 0;
-  font-size: 0.9rem;
-  word-break: break-all;
-}
-
-.pending {
-  margin: 0;
-  font-size: 0.9rem;
-  color: #0d4f8a;
 }
 </style>

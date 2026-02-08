@@ -6,7 +6,7 @@ Docs references:
 - Uniswap v4 hooks concept (pool-scoped hook execution): https://docs.uniswap.org/contracts/v4/concepts/hooks
 - Uniswap v4 PoolManager lifecycle overview: https://docs.uniswap.org/contracts/v4/overview
 - Uniswap v4 AsyncSwap/custom accounting context: https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap
-- Future direction: adopt standardized hook metadata/indexing conventions for faster caching/indexing.
+- Future direction: align with emerging hook metadata/indexing standards for faster caching/indexing.
 - OpenZeppelin Uniswap Hooks base contracts: not used in this frontend component.
 */
 
@@ -17,6 +17,7 @@ import { stealthBatchHookAbi } from "../abi/stealthBatchHookAbi";
 import {
   ChainMismatchError,
   WalletProviderError,
+  explorerBaseUrl,
   getVeilBatchContract,
   publicClient,
   walletClient,
@@ -26,6 +27,9 @@ import {
   MISSING_CONTRACT_ADDRESS_MESSAGE,
   getVeilBatchHookAddress,
 } from "../lib/viem/contractConfig";
+import { pushToast } from "../lib/ui/toast";
+
+type IntentStatus = "Queued" | "Clearable" | "Claimed" | "Failed";
 
 type IntentRow = {
   windowId: bigint;
@@ -33,22 +37,32 @@ type IntentRow = {
   amountIn: bigint;
   minOut: bigint;
   claimed: boolean;
-  status: "Pending Clear" | "Claimable" | "Claimed";
+  status: IntentStatus;
   claimableEstimate: bigint | null;
   canClaim: boolean;
-  claimTxHash: string | null;
+  queueTxHash: `0x${string}` | null;
+  claimTxHash: `0x${string}` | null;
+};
+
+type ClearRow = {
+  windowId: bigint;
+  totalIn: bigint;
+  totalOut: bigint;
+  txHash: `0x${string}`;
 };
 
 const address = getVeilBatchHookAddress();
 const INTENTS_REFRESH_EVENT = "veilswap:intents:refresh";
 
 const intents = ref<IntentRow[]>([]);
+const recentClears = ref<ClearRow[]>([]);
 const account = ref<Address | null>(null);
-const message = ref("Load intents to see claimable entries.");
+const message = ref("Load activity to view intent lifecycle and claim state.");
 const loading = ref(false);
 const claimBusyKey = ref<string | null>(null);
 
 const hasIntents = computed(() => intents.value.length > 0);
+const hasRecentClears = computed(() => recentClears.value.length > 0);
 
 function addressError(): string {
   if (!import.meta.env.PUBLIC_VEIL_BATCH_HOOK_ADDRESS) {
@@ -61,6 +75,17 @@ function toKey(windowId: bigint, intentId: bigint): string {
   return `${windowId.toString()}-${intentId.toString()}`;
 }
 
+function txExplorerUrl(hash: `0x${string}`): string {
+  return `${explorerBaseUrl}/tx/${hash}`;
+}
+
+function statusChipClass(status: IntentStatus): string {
+  if (status === "Clearable") return "chip-clearable";
+  if (status === "Claimed") return "chip-claimed";
+  if (status === "Failed") return "chip-failed";
+  return "chip-queued";
+}
+
 async function ensureAccount(allowPrompt: boolean): Promise<Address | null> {
   if (!walletClient) {
     throw new WalletProviderError();
@@ -70,9 +95,7 @@ async function ensureAccount(allowPrompt: boolean): Promise<Address | null> {
     account.value = existing[0];
     return existing[0];
   }
-  if (!allowPrompt) {
-    return null;
-  }
+  if (!allowPrompt) return null;
   const requested = await walletClient.requestAddresses();
   if (!requested[0]) {
     throw new Error("Wallet did not return an account.");
@@ -91,26 +114,32 @@ async function loadIntents(allowPrompt = true): Promise<void> {
   try {
     const user = await ensureAccount(allowPrompt);
     if (!user) {
-      message.value = "Connect wallet, then load intents.";
+      message.value = "Connect wallet, then load activity.";
       intents.value = [];
+      recentClears.value = [];
       return;
     }
+
     const readContract = getContract({
       address,
       abi: stealthBatchHookAbi,
       client: publicClient,
     });
 
-    // Use contract startBlock as lower bound to keep event scan performant.
-    const startBlock = await readContract.read.startBlock();
+    // Performance guard: use onchain deployment/start marker as bounded log range start.
+    const [startBlock, latestBlock] = await Promise.all([
+      readContract.read.startBlock(),
+      publicClient.getBlockNumber(),
+    ]);
 
-    const [queuedLogs, claimedLogs] = await Promise.all([
+    const [queuedLogs, claimedLogs, clearLogs] = await Promise.all([
       publicClient.getContractEvents({
         address,
         abi: stealthBatchHookAbi,
         eventName: "IntentQueued",
         strict: true,
         fromBlock: startBlock,
+        toBlock: latestBlock,
       }),
       publicClient.getContractEvents({
         address,
@@ -118,8 +147,28 @@ async function loadIntents(allowPrompt = true): Promise<void> {
         eventName: "Claimed",
         strict: true,
         fromBlock: startBlock,
+        toBlock: latestBlock,
+      }),
+      publicClient.getContractEvents({
+        address,
+        abi: stealthBatchHookAbi,
+        eventName: "WindowCleared",
+        strict: true,
+        fromBlock: startBlock,
+        toBlock: latestBlock,
       }),
     ]);
+
+    recentClears.value = clearLogs
+      .slice()
+      .sort((a, b) => Number((b.blockNumber ?? 0n) - (a.blockNumber ?? 0n)))
+      .slice(0, 5)
+      .map((log) => ({
+        windowId: log.args.windowId,
+        totalIn: log.args.totalIn,
+        totalOut: log.args.totalOut,
+        txHash: log.transactionHash,
+      }));
 
     const userIntents = queuedLogs.filter(
       (log) => log.args.user.toLowerCase() === user.toLowerCase(),
@@ -128,14 +177,13 @@ async function loadIntents(allowPrompt = true): Promise<void> {
       (log) => log.args.user.toLowerCase() === user.toLowerCase(),
     );
 
-    const claimedKeys = new Set(
-      claimedByUser.map((log) => toKey(log.args.windowId, log.args.intentId)),
+    const claimedTxByKey = new Map(
+      claimedByUser.map((log) => [toKey(log.args.windowId, log.args.intentId), log.transactionHash]),
     );
 
     const uniqueWindows = [...new Set(userIntents.map((log) => log.args.windowId.toString()))].map(
       (value) => BigInt(value),
     );
-
     const windowPairs = await Promise.all(
       uniqueWindows.map(async (windowId) => {
         const windowData = await readContract.read.getWindow([windowId]);
@@ -151,18 +199,20 @@ async function loadIntents(allowPrompt = true): Promise<void> {
         const intentData = await readContract.read.getIntent([window, intent]);
         const windowData = windowsById.get(window.toString());
 
-        const wasClaimed = claimedKeys.has(toKey(window, intent)) || intentData.claimed;
+        const claimKey = toKey(window, intent);
+        const claimHash = claimedTxByKey.get(claimKey) ?? null;
+        const wasClaimed = claimHash !== null || intentData.claimed;
         const isCleared = windowData?.cleared ?? false;
         const claimableEstimate =
           isCleared && !wasClaimed && (windowData?.totalIn ?? 0n) > 0n
             ? (intentData.amountIn * (windowData?.totalOut ?? 0n)) / (windowData?.totalIn ?? 1n)
             : null;
 
-        let status: IntentRow["status"] = "Pending Clear";
+        let status: IntentStatus = "Queued";
         if (wasClaimed) {
           status = "Claimed";
         } else if (isCleared) {
-          status = "Claimable";
+          status = "Clearable";
         }
 
         return {
@@ -173,8 +223,9 @@ async function loadIntents(allowPrompt = true): Promise<void> {
           claimed: wasClaimed,
           status,
           claimableEstimate,
-          canClaim: status === "Claimable",
-          claimTxHash: null,
+          canClaim: status === "Clearable",
+          queueTxHash: log.transactionHash,
+          claimTxHash: claimHash,
         } satisfies IntentRow;
       }),
     );
@@ -188,7 +239,7 @@ async function loadIntents(allowPrompt = true): Promise<void> {
     });
 
     intents.value = rows;
-    message.value = rows.length === 0 ? "No intents found for this wallet." : "Intents loaded.";
+    message.value = rows.length === 0 ? "No intents found for this wallet." : "Activity synced.";
   } catch (error) {
     if (error instanceof WalletProviderError || error instanceof ChainMismatchError) {
       message.value = error.message;
@@ -197,6 +248,7 @@ async function loadIntents(allowPrompt = true): Promise<void> {
     } else {
       message.value = "Failed to load intents.";
     }
+    pushToast(message.value, "error");
   } finally {
     loading.value = false;
   }
@@ -255,7 +307,14 @@ async function claimIntent(row: IntentRow): Promise<void> {
 
     window.dispatchEvent(new CustomEvent(INTENTS_REFRESH_EVENT));
     message.value = "Claim confirmed.";
+    pushToast("Claim output confirmed.", "success");
   } catch (error) {
+    intents.value = intents.value.map((item) =>
+      item.windowId === row.windowId && item.intentId === row.intentId
+        ? { ...item, status: "Failed", canClaim: true }
+        : item,
+    );
+
     if (error instanceof WalletProviderError || error instanceof ChainMismatchError) {
       message.value = error.message;
     } else if (error instanceof Error) {
@@ -263,6 +322,7 @@ async function claimIntent(row: IntentRow): Promise<void> {
     } else {
       message.value = "Claim failed.";
     }
+    pushToast(message.value, "error");
   } finally {
     claimBusyKey.value = null;
   }
@@ -271,58 +331,92 @@ async function claimIntent(row: IntentRow): Promise<void> {
 
 <template>
   <div class="panel">
-    <div class="actions">
-      <button class="button" type="button" :disabled="loading" @click="onLoadIntentsClick">
-        {{ loading ? "Loading..." : "Load My Intents" }}
+    <div class="button-row">
+      <button class="btn" type="button" :disabled="loading" @click="onLoadIntentsClick">
+        {{ loading ? "Loading..." : "Refresh Activity" }}
       </button>
+      <span class="chip" :class="hasIntents ? 'chip-success' : 'chip-queued'">
+        {{ hasIntents ? `${intents.length} intents` : "No intents loaded" }}
+      </span>
     </div>
-    <p class="message">{{ message }}</p>
 
-    <div v-if="hasIntents" class="list">
-      <article v-for="row in intents" :key="toKey(row.windowId, row.intentId)" class="item">
-        <dl>
-          <div>
-            <dt>Window</dt>
-            <dd>{{ row.windowId }}</dd>
+    <p class="status-line">{{ message }}</p>
+
+    <div v-if="hasIntents" class="intent-list">
+      <article v-for="row in intents" :key="toKey(row.windowId, row.intentId)" class="intent-item">
+        <header class="intent-head">
+          <strong class="mono">Window {{ row.windowId }} / Intent {{ row.intentId }}</strong>
+          <span class="chip" :class="statusChipClass(row.status)">{{ row.status }}</span>
+        </header>
+
+        <dl class="intent-metrics">
+          <div class="metric">
+            <span class="metric-label">Amount In</span>
+            <span class="metric-value mono">{{ row.amountIn }}</span>
           </div>
-          <div>
-            <dt>Intent</dt>
-            <dd>{{ row.intentId }}</dd>
+          <div class="metric">
+            <span class="metric-label">Min Out</span>
+            <span class="metric-value mono">{{ row.minOut }}</span>
           </div>
-          <div>
-            <dt>Amount In</dt>
-            <dd>{{ row.amountIn }}</dd>
+          <div class="metric">
+            <span class="metric-label">Claimable Estimate</span>
+            <span class="metric-value mono">{{ row.claimableEstimate ?? "—" }}</span>
           </div>
-          <div>
-            <dt>Min Out</dt>
-            <dd>{{ row.minOut }}</dd>
-          </div>
-          <div>
-            <dt>Status</dt>
-            <dd>{{ row.status }}</dd>
-          </div>
-          <div>
-            <dt>Claimable Estimate</dt>
-            <dd>{{ row.claimableEstimate ?? "—" }}</dd>
+          <div class="metric">
+            <span class="metric-label">State</span>
+            <span class="metric-value">{{ row.status }}</span>
           </div>
         </dl>
 
-        <button
-          class="button"
-          type="button"
-          :disabled="!row.canClaim || claimBusyKey === toKey(row.windowId, row.intentId)"
-          @click="claimIntent(row)"
-        >
-          {{
-            claimBusyKey === toKey(row.windowId, row.intentId)
-              ? "Claiming..."
-              : row.canClaim
-                ? "Claim"
-                : row.status
-          }}
-        </button>
-        <p v-if="row.claimTxHash" class="tx">Claim Tx: {{ row.claimTxHash }}</p>
+        <div class="intent-actions">
+          <button
+            class="btn btn-primary"
+            type="button"
+            :disabled="!row.canClaim || claimBusyKey === toKey(row.windowId, row.intentId)"
+            @click="claimIntent(row)"
+          >
+            {{
+              claimBusyKey === toKey(row.windowId, row.intentId)
+                ? "Claiming..."
+                : row.canClaim
+                  ? "Claim Output"
+                  : row.status
+            }}
+          </button>
+
+          <a v-if="row.queueTxHash" class="micro-link mono" :href="txExplorerUrl(row.queueTxHash)" target="_blank" rel="noreferrer">
+            Queue Tx
+          </a>
+          <a v-if="row.claimTxHash" class="micro-link mono" :href="txExplorerUrl(row.claimTxHash)" target="_blank" rel="noreferrer">
+            Claim Tx
+          </a>
+        </div>
       </article>
+    </div>
+
+    <div v-if="hasRecentClears" class="glass-subpanel">
+      <h4 class="section-title">Latest Clears</h4>
+      <div class="intent-list">
+        <article v-for="clear in recentClears" :key="clear.txHash" class="intent-item">
+          <div class="intent-head">
+            <strong class="mono">Window {{ clear.windowId }}</strong>
+            <span class="chip chip-cleared">Cleared</span>
+          </div>
+          <dl class="intent-metrics">
+            <div class="metric">
+              <span class="metric-label">Total In</span>
+              <span class="metric-value mono">{{ clear.totalIn }}</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Total Out</span>
+              <span class="metric-value mono">{{ clear.totalOut }}</span>
+            </div>
+          </dl>
+          <a class="micro-link mono" :href="txExplorerUrl(clear.txHash)" target="_blank" rel="noreferrer">
+            View Clear Tx
+          </a>
+        </article>
+      </div>
     </div>
   </div>
 </template>
@@ -330,67 +424,15 @@ async function claimIntent(row: IntentRow): Promise<void> {
 <style scoped>
 .panel {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.8rem;
 }
 
-.actions {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.button {
-  border: 1px solid #222;
-  background: #101010;
-  color: #fff;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.4rem;
-  font: inherit;
-  cursor: pointer;
-}
-
-.button:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.message {
-  margin: 0;
-  font-size: 0.9rem;
-}
-
-.list {
+.glass-subpanel {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.55rem;
 }
 
-.item {
-  border: 1px solid #d9d9d9;
-  border-radius: 0.5rem;
-  padding: 0.75rem;
-  display: grid;
-  gap: 0.6rem;
-}
-
-dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.4rem 0.8rem;
-}
-
-dt {
-  font-size: 0.8rem;
-  color: #5b5b5b;
-}
-
-dd {
+.glass-subpanel h4 {
   margin: 0;
-  font-weight: 600;
-  word-break: break-all;
-}
-
-.tx {
-  margin: 0;
-  font-size: 0.85rem;
-  word-break: break-all;
 }
 </style>

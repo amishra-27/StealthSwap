@@ -9,70 +9,38 @@ Docs references:
 */
 
 import AdminClearPanel from "../components/AdminClearPanel.vue";
+import AppShell from "../layouts/AppShell.astro";
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VeilSwap Executor - Manual Clear</title>
-  </head>
-  <body>
-    <main class="layout">
-      <header class="hero">
-        <h1>VeilSwap Executor (Manual Clear)</h1>
-        <p>
-          Fallback admin UI for demos. Visible controls are gated to `PUBLIC_EXECUTOR_ADDRESS`.
+<AppShell
+  title="Executor Console - Manual Clear"
+  subtitle="Fallback control surface for demos when automated clear execution is offline."
+  pageId="admin"
+>
+  <section class="workflow-layout">
+    <section class="workflow-main">
+      <article class="glass-card">
+        <div class="section-row">
+          <h2 class="section-title">Clear Window</h2>
+          <span class="chip chip-warning">Executor Gated</span>
+        </div>
+        <p class="section-note">
+          Manual clear for previous ended window. This path is permissionless onchain but UI-gated
+          by configured executor address.
         </p>
-      </header>
-
-      <section class="card">
         <AdminClearPanel client:load />
-      </section>
+      </article>
+    </section>
 
-      <section class="card">
-        <a href="/">Back to main app</a>
-      </section>
-    </main>
-  </body>
-</html>
-
-<style>
-  :root {
-    --line: #dadce3;
-    --ink: #171717;
-    --bg: #f3f4f6;
-    --panel: #fff;
-  }
-  * {
-    box-sizing: border-box;
-  }
-  body {
-    margin: 0;
-    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-    color: var(--ink);
-    background:
-      radial-gradient(circle at 20% 10%, #fff, #eef2f8 35%, #e4e9f2 100%);
-  }
-  .layout {
-    width: min(980px, 92vw);
-    margin: 2rem auto;
-    display: grid;
-    gap: 1rem;
-  }
-  .hero,
-  .card {
-    border: 1px solid var(--line);
-    background: var(--panel);
-    border-radius: 0.8rem;
-    padding: 1rem 1.1rem;
-  }
-  .hero h1 {
-    margin: 0;
-    font-size: clamp(1.25rem, 2.2vw, 1.8rem);
-  }
-  .hero p {
-    margin: 0.5rem 0 0;
-  }
-</style>
+    <aside class="secondary-panel">
+      <article class="glass-card">
+        <h3 class="section-title">Safety Notes</h3>
+        <ul class="bullet-list">
+          <li>Use the same executor wallet as `PUBLIC_EXECUTOR_ADDRESS`.</li>
+          <li>Confirm target network is Sepolia before signing.</li>
+          <li>Validate previous window is ended and not already cleared.</li>
+        </ul>
+      </article>
+    </aside>
+  </section>
+</AppShell>

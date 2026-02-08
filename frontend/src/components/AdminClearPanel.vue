@@ -22,6 +22,7 @@ import {
   ChainMismatchError,
   WalletProviderError,
   TARGET_CHAIN_ID,
+  explorerBaseUrl,
   getVeilBatchContract,
   publicClient,
   targetChain,
@@ -35,6 +36,7 @@ import {
   getExecutorAddress,
   getVeilBatchHookAddress,
 } from "../lib/viem/contractConfig";
+import { pushToast } from "../lib/ui/toast";
 
 const address = getVeilBatchHookAddress();
 const executorAddress = getExecutorAddress();
@@ -71,7 +73,7 @@ function contractAddressError(): string {
 }
 
 function executorAddressError(): string {
-  if (!import.meta.env.PUBLIC_EXECUTOR_ADDRESS) {
+  if (!import.meta.env.PUBLIC_EXECUTOR_ADDRESS && !import.meta.env.EXECUTOR_ADDRESS) {
     return MISSING_EXECUTOR_ADDRESS_MESSAGE;
   }
   return INVALID_EXECUTOR_ADDRESS_MESSAGE;
@@ -86,6 +88,9 @@ async function connectWallet(): Promise<void> {
     const [connected] = await walletClient.requestAddresses();
     account.value = connected ?? null;
     chainId.value = await walletClient.getChainId();
+    if (account.value?.toLowerCase() === normalizedExecutor) {
+      pushToast("Executor wallet connected.", "success");
+    }
   } catch (error) {
     message.value = error instanceof Error ? error.message : "Failed to connect wallet.";
   }
@@ -187,80 +192,93 @@ async function clearPreviousWindow(): Promise<void> {
     const hash = await contract.write.clear([previousWindowId.value], { account: signer });
     txHash.value = hash;
     message.value = "Clear transaction submitted. Waiting for confirmation...";
+    pushToast("Clear transaction submitted.", "info");
     await publicClient.waitForTransactionReceipt({ hash });
     message.value = "Window cleared.";
+    pushToast("Window clear confirmed.", "success");
     await refreshWindowState();
   } catch (error) {
     message.value = error instanceof Error ? error.message : "Clear transaction failed.";
+    pushToast(message.value, "error");
   } finally {
     clearing.value = false;
   }
 }
+
+const txExplorerUrl = computed(() =>
+  txHash.value ? `${explorerBaseUrl}/tx/${txHash.value}` : null,
+);
 </script>
 
 <template>
   <div class="panel">
-    <p class="helper">
+    <p class="helper-text">
       Executor-only helper for demo fallback. If backend executor is off, clear the previous ended
       window manually.
     </p>
-    <div class="actions">
-      <button class="button" type="button" :disabled="loading || clearing" @click="connectWallet">
+    <div class="button-row">
+      <button class="btn" type="button" :disabled="loading || clearing" @click="connectWallet">
         Connect Wallet
       </button>
-      <button class="button" type="button" :disabled="loading || clearing" @click="refreshWindowState">
+      <button class="btn" type="button" :disabled="loading || clearing" @click="refreshWindowState">
         {{ loading ? "Refreshing..." : "Refresh Window" }}
       </button>
       <button
         v-if="isAuthorized"
-        class="button"
+        class="btn btn-primary"
         type="button"
         :disabled="!canClear || loading || clearing"
         @click="clearPreviousWindow"
       >
         {{ clearing ? "Clearing..." : "Clear Previous Window" }}
       </button>
+      <span v-if="!isAuthorized" class="chip chip-warning">Executor address mismatch</span>
     </div>
 
-    <dl class="stats">
-      <div>
-        <dt>Executor Address</dt>
-        <dd>{{ executorAddress ?? "Not set" }}</dd>
+    <dl class="metric-grid">
+      <div class="metric">
+        <span class="metric-label">Executor Address</span>
+        <span class="metric-value mono">{{ executorAddress ?? "Not set" }}</span>
       </div>
-      <div>
-        <dt>Connected Account</dt>
-        <dd>{{ account ?? "Not connected" }}</dd>
+      <div class="metric">
+        <span class="metric-label">Connected Account</span>
+        <span class="metric-value mono">{{ account ?? "Not connected" }}</span>
       </div>
-      <div>
-        <dt>Authorized</dt>
-        <dd>{{ isAuthorized ? "Yes" : "No" }}</dd>
+      <div class="metric">
+        <span class="metric-label">Authorized</span>
+        <span class="metric-value">{{ isAuthorized ? "Yes" : "No" }}</span>
       </div>
-      <div>
-        <dt>Chain</dt>
-        <dd>{{ chainId === null ? "Unknown" : `${targetChain.name} target (${chainId})` }}</dd>
+      <div class="metric">
+        <span class="metric-label">Chain</span>
+        <span class="metric-value">{{ chainId === null ? "Unknown" : `${targetChain.name} (${chainId})` }}</span>
       </div>
-      <div>
-        <dt>Latest Block</dt>
-        <dd>{{ latestBlock ?? "—" }}</dd>
+      <div class="metric">
+        <span class="metric-label">Latest Block</span>
+        <span class="metric-value mono">{{ latestBlock ?? "—" }}</span>
       </div>
-      <div>
-        <dt>Previous Window</dt>
-        <dd>{{ previousWindowId ?? "—" }}</dd>
+      <div class="metric">
+        <span class="metric-label">Previous Window</span>
+        <span class="metric-value mono">{{ previousWindowId ?? "—" }}</span>
       </div>
-      <div>
-        <dt>Ended</dt>
-        <dd>{{ previousWindowEnded ? "Yes" : "No" }}</dd>
+      <div class="metric">
+        <span class="metric-label">Ended</span>
+        <span class="metric-value">{{ previousWindowEnded ? "Yes" : "No" }}</span>
       </div>
-      <div>
-        <dt>Cleared</dt>
-        <dd>{{
+      <div class="metric">
+        <span class="metric-label">Cleared</span>
+        <span class="metric-value">{{
           previousWindowCleared === null ? "—" : previousWindowCleared ? "Yes" : "No"
-        }}</dd>
+        }}</span>
       </div>
     </dl>
 
-    <p class="message">{{ message }}</p>
-    <p v-if="txHash" class="tx">Tx: {{ txHash }}</p>
+    <p class="status-line">{{ message }}</p>
+    <p v-if="txHash" class="helper-text mono">
+      Tx:
+      <a class="micro-link" :href="txExplorerUrl ?? '#'" target="_blank" rel="noreferrer">
+        {{ txHash }}
+      </a>
+    </p>
   </div>
 </template>
 
@@ -268,56 +286,5 @@ async function clearPreviousWindow(): Promise<void> {
 .panel {
   display: grid;
   gap: 0.75rem;
-}
-
-.helper,
-.message,
-.tx {
-  margin: 0;
-  font-size: 0.9rem;
-  word-break: break-all;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-}
-
-.button {
-  border: 1px solid #222;
-  background: #101010;
-  color: #fff;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.4rem;
-  font: inherit;
-  cursor: pointer;
-}
-
-.button:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem 1rem;
-}
-
-dt {
-  font-size: 0.8rem;
-  color: #5b5b5b;
-}
-
-dd {
-  margin: 0;
-  font-weight: 600;
-}
-
-@media (max-width: 720px) {
-  .stats {
-    grid-template-columns: repeat(1, minmax(0, 1fr));
-  }
 }
 </style>
