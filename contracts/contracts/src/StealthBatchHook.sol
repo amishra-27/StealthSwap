@@ -21,6 +21,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {StealthBaseHook} from "./base/StealthBaseHook.sol";
 import {StealthBatchWindow} from "./StealthBatchWindow.sol";
+import {StealthBatchMath} from "./StealthBatchMath.sol";
 
 /// @notice SC-1 skeleton for N-block batched intents with pull-based pro-rata claims.
 /// @dev This contract is single-pool for MVP, but storage remains PoolId-scoped for future multi-pool extension.
@@ -34,6 +35,9 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     error WindowNotEnded(uint256 currentBlock, uint256 windowEndExclusive);
     error WindowAlreadyCleared();
     error WindowNotCleared();
+    error WindowNotFullySettled(uint256 terminalIntentCount, uint256 intentCount);
+    error DustAlreadySwept();
+    error SweepRecipientZero();
     error RecipientZero();
     error AmountTooSmall();
     error AlreadyQueuedInWindow();
@@ -41,7 +45,6 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     error InvalidIntentId();
     error IntentAlreadyClaimed();
     error UnauthorizedClaim();
-    error MinOutNotMet(uint256 amountOut, uint128 minOut);
     error CancelDelayNotElapsed(uint256 currentBlock, uint256 cancelAvailableBlock);
     error WindowTotalInTooLow(uint256 totalIn, uint256 intentAmountIn);
 
@@ -49,7 +52,10 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         uint256 totalIn;
         uint256 totalOut;
         uint256 intentCount;
+        uint256 terminalIntentCount;
+        uint256 claimedOutSum;
         bool cleared;
+        bool dustSwept;
     }
 
     /// @dev Intent schema requested by SC-1.
@@ -90,6 +96,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
     event IntentCancelled(
         PoolId indexed poolId, uint64 indexed windowId, uint256 indexed intentId, address user, uint128 amountIn
     );
+    event DustSwept(PoolId indexed poolId, uint64 indexed windowId, address indexed to, uint256 amountOut);
 
     constructor(
         IPoolManager _poolManager,
@@ -172,6 +179,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         intentId = intentsByPoolAndWindow[poolId][windowId].length - 1;
         window.totalIn += amountIn;
         window.intentCount += 1;
+        // Intentionally not reset on claim/cancel: one intent per user per window for MVP.
         hasQueuedIntent[poolId][windowId][msg.sender] = true;
 
         emit IntentQueued(poolId, windowId, intentId, msg.sender, amountIn, zeroForOneDirection);
@@ -207,10 +215,12 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         if (intent.user != msg.sender) revert UnauthorizedClaim();
         if (intent.claimed) revert IntentAlreadyClaimed();
 
-        amountOut = (uint256(intent.amountIn) * window.totalOut) / window.totalIn;
-        if (amountOut < intent.minOut) revert MinOutNotMet(amountOut, intent.minOut);
+        amountOut = StealthBatchMath.proRataOutFloor(window.totalOut, uint256(intent.amountIn), window.totalIn);
+        StealthBatchMath.enforceMinOutAtClaim(amountOut, intent.minOut);
 
         intent.claimed = true;
+        window.terminalIntentCount += 1;
+        window.claimedOutSum += amountOut;
 
         /// REVIEW REQUIRED:
         /// - Transfer output tokens to `intent.recipient` using pull-based payout.
@@ -241,7 +251,7 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         if (window.totalIn < intent.amountIn) revert WindowTotalInTooLow(window.totalIn, intent.amountIn);
         intent.claimed = true;
         window.totalIn -= intent.amountIn;
-        window.intentCount -= 1;
+        window.terminalIntentCount += 1;
 
         /// REVIEW REQUIRED:
         /// - Return escrowed input to `intent.user` using pull-based refund.
@@ -249,6 +259,28 @@ contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuar
         /// - `cancelDelayBlocks == 0` means cancel is available immediately once window end is reached.
 
         emit IntentCancelled(poolId, windowId, intentId, msg.sender, intent.amountIn);
+    }
+
+    function sweepDust(uint64 windowId, address to) external nonReentrant returns (uint256 amountOut) {
+        if (to == address(0)) revert SweepRecipientZero();
+
+        PoolId poolId = allowedPoolId;
+        WindowState storage window = windows[poolId][windowId];
+        if (!window.cleared) revert WindowNotCleared();
+        if (window.dustSwept) revert DustAlreadySwept();
+        if (window.terminalIntentCount != window.intentCount) {
+            revert WindowNotFullySettled(window.terminalIntentCount, window.intentCount);
+        }
+
+        amountOut = StealthBatchMath.getSweepableDust(window.totalOut, window.claimedOutSum);
+        window.dustSwept = true;
+
+        /// REVIEW REQUIRED:
+        /// - Transfer dust output tokens to `to`.
+        /// - Confirm sweep authorization model (permissionless vs role-gated).
+        /// - Confirm final-state accounting invariants across claim/cancel/sweep.
+
+        emit DustSwept(poolId, windowId, to, amountOut);
     }
 
     /// @dev Callback hook placeholder for lifecycle visibility; poolManager invokes this before swap execution.

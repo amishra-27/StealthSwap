@@ -9,21 +9,23 @@ import {HookMiner} from "../test/utils/HookMiner.sol";
 contract DeployHookScript is Script {
     address constant CREATE2_DEPLOYER = address(0x4e59b44847b379578588920cA78FbF26c0B4956C);
     address manager = payable(vm.envAddress("POOL_MANAGER_ADDR"));
+    error InvalidStealthBatchFlags(uint160 expected, uint160 actual);
 
     function setUp() public {}
 
     function run() public {
         bytes memory constructorArgs = getConstructorArgsFromEnv();
+        string memory hookContract = vm.envString("HOOK_CONTRACT");
 
         // hook contracts must have specific flags encoded in the address
         // ------------------------------ //
         // --- Set your flags in .env --- //
         // ------------------------------ //
         uint160 flags = getFlagsFromEnv();
+        validateFlagsForHook(hookContract, flags);
         console2.logBytes32(bytes32(uint256(flags)));
 
         // Mine a salt that will produce a hook address with the correct flags
-        string memory hookContract = vm.envString("HOOK_CONTRACT");
         bytes memory creationCode = vm.getCode(hookContract);
         (address hookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, creationCode, constructorArgs);
@@ -62,6 +64,14 @@ contract DeployHookScript is Script {
 
     function _eq(string memory a, string memory b) internal pure returns (bool) {
         return keccak256(bytes(a)) == keccak256(bytes(b));
+    }
+
+    /// @dev If permissions change (e.g. adding afterInitialize), update flags and re-mine.
+    function validateFlagsForHook(string memory hookContract, uint160 flags) internal pure {
+        if (_eq(hookContract, "StealthBatchHook.sol:StealthBatchHook")) {
+            uint160 expected = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
+            if (flags != expected) revert InvalidStealthBatchFlags(expected, flags);
+        }
     }
 
     /// @dev Read booleans flags from the environemnt and encode them into the uint160 bit flags
