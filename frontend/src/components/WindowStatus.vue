@@ -5,6 +5,7 @@ Docs references:
 - Uniswap v4 hooks concept (pool-scoped hook execution): https://docs.uniswap.org/contracts/v4/concepts/hooks
 - Uniswap v4 PoolManager lifecycle overview: https://docs.uniswap.org/contracts/v4/overview
 - Uniswap v4 AsyncSwap/custom accounting context: https://docs.uniswap.org/contracts/v4/quickstart/hooks/async-swap
+  Rationale: intents clear after a batching window, so the UI tracks window progress and remaining blocks.
 - OpenZeppelin Uniswap Hooks base contracts: not used in this frontend component.
 */
 
@@ -25,9 +26,6 @@ const blockNumber = ref<bigint | null>(null);
 const windowId = ref<bigint | null>(null);
 const endBlock = ref<bigint | null>(null);
 const blocksRemaining = ref<bigint | null>(null);
-const totalIn = ref<bigint | null>(null);
-const totalOut = ref<bigint | null>(null);
-const cleared = ref<boolean | null>(null);
 const message = ref("Loading window state...");
 const busy = ref(false);
 let intervalId: number | undefined;
@@ -61,23 +59,12 @@ async function refresh(): Promise<void> {
 
     blockNumber.value = latestBlock;
 
-    let activeWindowId: bigint;
-    try {
-      activeWindowId = await contract.read.getWindowId([latestBlock]);
-    } catch {
-      activeWindowId =
-        latestBlock >= startBlock ? (latestBlock - startBlock) / blocksPerWindow : 0n;
-    }
+    const activeWindowId = latestBlock >= startBlock ? (latestBlock - startBlock) / blocksPerWindow : 0n;
 
     windowId.value = activeWindowId;
     endBlock.value = startBlock + (activeWindowId + 1n) * blocksPerWindow - 1n;
     blocksRemaining.value =
       endBlock.value >= latestBlock ? endBlock.value - latestBlock + 1n : 0n;
-
-    const windowData = await contract.read.getWindow([activeWindowId]);
-    totalIn.value = windowData.totalIn;
-    totalOut.value = windowData.totalOut;
-    cleared.value = windowData.cleared;
 
     message.value = "Window status updated.";
   } catch (error) {
@@ -91,7 +78,7 @@ onMounted(() => {
   void refresh();
   intervalId = window.setInterval(() => {
     void refresh();
-  }, 12000);
+  }, 5000);
 });
 
 onUnmounted(() => {
@@ -119,24 +106,8 @@ onUnmounted(() => {
         <dd>{{ windowId ?? "—" }}</dd>
       </div>
       <div>
-        <dt>End Block</dt>
-        <dd>{{ endBlock ?? "—" }}</dd>
-      </div>
-      <div>
         <dt>Countdown (blocks)</dt>
         <dd>{{ blocksRemaining ?? "—" }}</dd>
-      </div>
-      <div>
-        <dt>Total In</dt>
-        <dd>{{ totalIn ?? "—" }}</dd>
-      </div>
-      <div>
-        <dt>Cleared</dt>
-        <dd>{{ cleared === null ? "—" : cleared ? "Yes" : "No" }}</dd>
-      </div>
-      <div>
-        <dt>Total Out</dt>
-        <dd>{{ totalOut ?? "—" }}</dd>
       </div>
     </dl>
     <p class="message">{{ message }}</p>
