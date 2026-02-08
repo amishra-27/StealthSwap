@@ -10,7 +10,7 @@ Docs references:
 */
 
 import { getContract, type Address } from "viem";
-import { computed, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 
 import { stealthBatchHookAbi } from "../abi/stealthBatchHookAbi";
 import {
@@ -36,6 +36,7 @@ type IntentRow = {
 };
 
 const address = getVeilBatchHookAddress();
+const INTENTS_REFRESH_EVENT = "veilswap:intents:refresh";
 
 const intents = ref<IntentRow[]>([]);
 const account = ref<Address | null>(null);
@@ -56,7 +57,7 @@ function toKey(windowId: bigint, intentId: bigint): string {
   return `${windowId.toString()}-${intentId.toString()}`;
 }
 
-async function ensureAccount(): Promise<Address> {
+async function ensureAccount(allowPrompt: boolean): Promise<Address | null> {
   if (!walletClient) {
     throw new WalletProviderError();
   }
@@ -64,6 +65,9 @@ async function ensureAccount(): Promise<Address> {
   if (existing[0]) {
     account.value = existing[0];
     return existing[0];
+  }
+  if (!allowPrompt) {
+    return null;
   }
   const requested = await walletClient.requestAddresses();
   if (!requested[0]) {
@@ -73,7 +77,7 @@ async function ensureAccount(): Promise<Address> {
   return requested[0];
 }
 
-async function loadIntents(): Promise<void> {
+async function loadIntents(allowPrompt = true): Promise<void> {
   if (!address) {
     message.value = addressError();
     return;
@@ -81,7 +85,12 @@ async function loadIntents(): Promise<void> {
 
   loading.value = true;
   try {
-    const user = await ensureAccount();
+    const user = await ensureAccount(allowPrompt);
+    if (!user) {
+      message.value = "Connect wallet, then load intents.";
+      intents.value = [];
+      return;
+    }
     const readContract = getContract({
       address,
       abi: stealthBatchHookAbi,
@@ -138,6 +147,18 @@ async function loadIntents(): Promise<void> {
     loading.value = false;
   }
 }
+
+function onIntentsRefreshRequested(): void {
+  void loadIntents(false);
+}
+
+onMounted(() => {
+  window.addEventListener(INTENTS_REFRESH_EVENT, onIntentsRefreshRequested);
+});
+
+onUnmounted(() => {
+  window.removeEventListener(INTENTS_REFRESH_EVENT, onIntentsRefreshRequested);
+});
 
 async function claimIntent(row: IntentRow): Promise<void> {
   if (!address) {
