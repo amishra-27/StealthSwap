@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import "forge-std/Script.sol";
-import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import "../lib/forge-std/src/Script.sol";
+import {Hooks} from "../lib/v4-core/src/libraries/Hooks.sol";
+import {PoolId} from "../lib/v4-core/src/types/PoolId.sol";
 import {HookMiner} from "../test/utils/HookMiner.sol";
 
 contract DeployHookScript is Script {
@@ -12,7 +13,7 @@ contract DeployHookScript is Script {
     function setUp() public {}
 
     function run() public {
-        bytes memory constructorArgs = abi.encode(manager);
+        bytes memory constructorArgs = getConstructorArgsFromEnv();
 
         // hook contracts must have specific flags encoded in the address
         // ------------------------------ //
@@ -22,7 +23,8 @@ contract DeployHookScript is Script {
         console2.logBytes32(bytes32(uint256(flags)));
 
         // Mine a salt that will produce a hook address with the correct flags
-        bytes memory creationCode = vm.getCode(vm.envString("HOOK_CONTRACT"));
+        string memory hookContract = vm.envString("HOOK_CONTRACT");
+        bytes memory creationCode = vm.getCode(hookContract);
         (address hookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, creationCode, constructorArgs);
 
@@ -37,6 +39,29 @@ contract DeployHookScript is Script {
 
         // verify proper create2 usage
         require(deployedHook == hookAddress, "DeployScript: hook address mismatch");
+    }
+
+    /// @dev Constructor args are contract-specific. Keep this in sync with the selected HOOK_CONTRACT.
+    function getConstructorArgsFromEnv() internal view returns (bytes memory) {
+        string memory hookContract = vm.envString("HOOK_CONTRACT");
+        if (_eq(hookContract, "StealthBatchHook.sol:StealthBatchHook")) {
+            return abi.encode(
+                manager,
+                PoolId.wrap(vm.envBytes32("ALLOWED_POOL_ID")),
+                uint64(vm.envUint("START_BLOCK")),
+                uint64(vm.envUint("BLOCKS_PER_WINDOW")),
+                uint64(vm.envUint("CANCEL_DELAY_BLOCKS")),
+                uint16(vm.envUint("MAX_INTENTS_PER_WINDOW")),
+                uint128(vm.envUint("MIN_AMOUNT_IN")),
+                vm.envBool("ZERO_FOR_ONE_DIRECTION")
+            );
+        }
+        // Default scaffold hook (Counter) constructor args.
+        return abi.encode(manager);
+    }
+
+    function _eq(string memory a, string memory b) internal pure returns (bool) {
+        return keccak256(bytes(a)) == keccak256(bytes(b));
     }
 
     /// @dev Read booleans flags from the environemnt and encode them into the uint160 bit flags

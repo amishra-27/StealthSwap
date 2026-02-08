@@ -20,17 +20,16 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {StealthBaseHook} from "./base/StealthBaseHook.sol";
+import {StealthBatchWindow} from "./StealthBatchWindow.sol";
 
 /// @notice SC-1 skeleton for N-block batched intents with pull-based pro-rata claims.
 /// @dev This contract is single-pool for MVP, but storage remains PoolId-scoped for future multi-pool extension.
-contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
+contract StealthBatchHook is StealthBaseHook, StealthBatchWindow, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
 
     error InvalidPool();
-    error BlocksPerWindowZero();
     error MaxIntentsZero();
     error MinAmountZero();
-    error WindowNotStarted();
     error UnknownWindow();
     error WindowNotEnded(uint256 currentBlock, uint256 windowEndExclusive);
     error WindowAlreadyCleared();
@@ -44,6 +43,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
     error UnauthorizedClaim();
     error MinOutNotMet(uint256 amountOut, uint128 minOut);
     error CancelDelayNotElapsed(uint256 currentBlock, uint256 cancelAvailableBlock);
+    error WindowTotalInTooLow(uint256 totalIn, uint256 intentAmountIn);
 
     struct WindowState {
         uint256 totalIn;
@@ -60,11 +60,10 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
         uint128 minOut;
         uint64 windowId;
         bool zeroForOne;
+        // NOTE: "claimed" means terminally settled for this intent (claimed OR canceled).
         bool claimed;
     }
 
-    uint64 public immutable blocksPerWindow;
-    uint64 public immutable startBlock;
     uint64 public immutable cancelDelayBlocks;
     uint16 public immutable maxIntentsPerWindow;
     uint128 public immutable minAmountIn;
@@ -101,14 +100,11 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
         uint16 _maxIntentsPerWindow,
         uint128 _minAmountIn,
         bool _zeroForOneDirection
-    ) StealthBaseHook(_poolManager) {
-        if (_blocksPerWindow == 0) revert BlocksPerWindowZero();
+    ) StealthBaseHook(_poolManager) StealthBatchWindow(_startBlock, _blocksPerWindow) {
         if (_maxIntentsPerWindow == 0) revert MaxIntentsZero();
         if (_minAmountIn == 0) revert MinAmountZero();
 
         allowedPoolId = _allowedPoolId;
-        startBlock = _startBlock;
-        blocksPerWindow = _blocksPerWindow;
         cancelDelayBlocks = _cancelDelayBlocks;
         maxIntentsPerWindow = _maxIntentsPerWindow;
         minAmountIn = _minAmountIn;
@@ -132,14 +128,9 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
         });
     }
 
-    function getCurrentWindowId() public view returns (uint64 windowId) {
-        if (block.number < startBlock) revert WindowNotStarted();
-        windowId = uint64((block.number - startBlock) / blocksPerWindow);
-    }
-
     function getWindowBounds(uint64 windowId) public view returns (uint256 windowStart, uint256 windowEndExclusive) {
-        windowStart = startBlock + uint256(windowId) * blocksPerWindow;
-        windowEndExclusive = windowStart + blocksPerWindow;
+        windowStart = getWindowStart(windowId);
+        windowEndExclusive = getWindowEnd(windowId);
     }
 
     function getWindow(uint64 windowId) external view returns (WindowState memory) {
@@ -195,7 +186,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
         if (window.intentCount == 0) revert UnknownWindow();
         if (window.cleared) revert WindowAlreadyCleared();
 
-        (, uint256 windowEndExclusive) = getWindowBounds(windowId);
+        uint256 windowEndExclusive = getWindowEnd(windowId);
         if (block.number < windowEndExclusive) {
             revert WindowNotEnded(block.number, windowEndExclusive);
         }
@@ -237,7 +228,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
         if (window.cleared) revert WindowAlreadyCleared();
         if (intentId >= intentsByPoolAndWindow[poolId][windowId].length) revert InvalidIntentId();
 
-        (, uint256 windowEndExclusive) = getWindowBounds(windowId);
+        uint256 windowEndExclusive = getWindowEnd(windowId);
         uint256 cancelAvailableBlock = windowEndExclusive + cancelDelayBlocks;
         if (block.number < cancelAvailableBlock) {
             revert CancelDelayNotElapsed(block.number, cancelAvailableBlock);
@@ -247,6 +238,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
         if (intent.user != msg.sender) revert UnauthorizedClaim();
         if (intent.claimed) revert IntentAlreadyClaimed();
 
+        if (window.totalIn < intent.amountIn) revert WindowTotalInTooLow(window.totalIn, intent.amountIn);
         intent.claimed = true;
         window.totalIn -= intent.amountIn;
         window.intentCount -= 1;
@@ -254,6 +246,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
         /// REVIEW REQUIRED:
         /// - Return escrowed input to `intent.user` using pull-based refund.
         /// - Ensure escrow accounting cannot be drained/replayed after cancellation.
+        /// - `cancelDelayBlocks == 0` means cancel is available immediately once window end is reached.
 
         emit IntentCancelled(poolId, windowId, intentId, msg.sender, intent.amountIn);
     }
@@ -266,7 +259,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
     {
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(allowedPoolId)) revert InvalidPool();
         beforeSwapCount[key.toId()]++;
-        return IHooks.beforeSwap.selector;
+        return this.beforeSwap.selector;
     }
 
     /// @dev Callback hook placeholder for lifecycle visibility; poolManager invokes this after swap execution.
@@ -277,7 +270,7 @@ contract StealthBatchHook is StealthBaseHook, ReentrancyGuard {
     {
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(allowedPoolId)) revert InvalidPool();
         afterSwapCount[key.toId()]++;
-        return IHooks.afterSwap.selector;
+        return this.afterSwap.selector;
     }
 
     /// REVIEW REQUIRED:
