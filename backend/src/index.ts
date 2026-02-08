@@ -8,3 +8,4 @@ Docs references:
 export { getHookContract, publicClient, walletClient } from "./clients.js";
 export { stealthBatchHookAbi } from "./abi/stealthBatchHookAbi.js";
 export type { StealthBatchHookAbi } from "./abi/stealthBatchHookAbi.js";
+export { runExecutorLoop } from "./executor.js";
